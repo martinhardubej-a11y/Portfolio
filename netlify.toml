@@ -1,0 +1,8 @@
+[build]
+  publish = "public"
+  functions = "netlify/functions"
+
+[[redirects]]
+  from = "/api/yahoo"
+  to = "/.netlify/functions/yahoo"
+  status = 200

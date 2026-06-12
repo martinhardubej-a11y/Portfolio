@@ -1,0 +1,1186 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Moje Portfolio</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Portfolio">
+<meta name="theme-color" content="#0b1220">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-180.png">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#0b1220; --card:#141d31; --card2:#1b2740; --line:#243352;
+    --text:#e8edf7; --muted:#8b97b1; --faint:#5b6884;
+    --up:#3ddc97; --down:#ff6b6b; --accent:#5b8cff; --gold:#f5b941;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent}
+  html,body{margin:0; padding:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    font-size:15px; overscroll-behavior-y:contain}
+  .num{font-variant-numeric:tabular-nums}
+
+  header{position:sticky; top:0; z-index:20; background:rgba(11,18,32,.85);
+    backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+    padding:calc(env(safe-area-inset-top) + 12px) 16px 10px;
+    display:flex; align-items:center; justify-content:space-between;
+    border-bottom:1px solid var(--line)}
+  header h1{font-size:17px; margin:0; font-weight:700; letter-spacing:.2px}
+  #refreshInfo{font-size:11px; color:var(--faint)}
+  #refreshInfo.spin::before{content:'⟳ '; display:inline-block; animation:rot 1s linear infinite}
+  @keyframes rot{to{transform:rotate(360deg)}}
+
+  main{padding:14px 14px calc(env(safe-area-inset-bottom) + 84px); max-width:760px; margin:0 auto}
+
+  .tabbar{position:fixed; left:0; right:0; bottom:0; z-index:30;
+    display:flex; background:rgba(13,20,36,.92); backdrop-filter:blur(14px);
+    -webkit-backdrop-filter:blur(14px); border-top:1px solid var(--line);
+    padding:6px 4px calc(env(safe-area-inset-bottom) + 6px)}
+  .tabbar button{flex:1; background:none; border:none; color:var(--faint);
+    font-size:10px; display:flex; flex-direction:column; align-items:center; gap:3px;
+    padding:4px 0; cursor:pointer; font-family:inherit}
+  .tabbar button .ico{font-size:20px; line-height:1}
+  .tabbar button.active{color:var(--accent)}
+
+  .card{background:var(--card); border:1px solid var(--line); border-radius:16px;
+    padding:16px; margin-bottom:14px}
+  .card h3{margin:0 0 12px; font-size:15px; font-weight:700}
+  .label{font-size:12px; color:var(--muted); margin-bottom:2px}
+  .big{font-size:34px; font-weight:800; letter-spacing:-.5px}
+  .up{color:var(--up)} .down{color:var(--down)}
+  .pill{display:inline-block; font-size:11px; font-weight:700; padding:2px 8px; border-radius:99px}
+  .pill.up{background:rgba(61,220,151,.14)} .pill.down{background:rgba(255,107,107,.14)}
+  .muted{color:var(--muted)} .small{font-size:12px} .tiny{font-size:11px}
+
+  .row{display:flex; align-items:center; justify-content:space-between; gap:10px;
+    padding:11px 0; border-bottom:1px solid var(--line); cursor:pointer}
+  .row:last-child{border-bottom:none}
+  .row .l{min-width:0}
+  .row .sym{font-weight:700; font-size:14px}
+  .row .name{font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:46vw}
+  .row .r{text-align:right; flex-shrink:0}
+
+  .grid2{display:grid; grid-template-columns:1fr 1fr; gap:12px}
+  .stat .label{margin-bottom:1px}
+  .stat .v{font-size:14px; font-weight:600}
+
+  .seg{display:flex; background:var(--card2); border-radius:10px; padding:3px; gap:3px; margin-bottom:12px}
+  .seg button{flex:1; border:none; background:none; color:var(--muted); font-size:12px;
+    font-weight:600; padding:7px 0; border-radius:8px; cursor:pointer; font-family:inherit}
+  .seg button.active{background:var(--accent); color:#fff}
+
+  .btn{display:block; width:100%; border:none; border-radius:12px; padding:13px;
+    font-size:15px; font-weight:700; cursor:pointer; font-family:inherit}
+  .btn.primary{background:var(--accent); color:#fff}
+  .btn.danger{background:rgba(255,107,107,.14); color:var(--down)}
+  .btn.ghost{background:var(--card2); color:var(--text)}
+  .btn:disabled{opacity:.45}
+  .iconbtn{background:var(--card2); border:1px solid var(--line); color:var(--text);
+    border-radius:10px; width:34px; height:34px; font-size:18px; cursor:pointer; line-height:1}
+
+  input,select{width:100%; background:var(--card2); border:1px solid var(--line);
+    border-radius:10px; color:var(--text); padding:12px; font-size:15px; font-family:inherit;
+    margin-bottom:10px; -webkit-appearance:none; appearance:none}
+  input:focus,select:focus{outline:none; border-color:var(--accent)}
+  label.f{display:block; font-size:12px; color:var(--muted); margin-bottom:4px}
+
+  .modal-bg{position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:50;
+    display:flex; align-items:flex-end; justify-content:center}
+  .modal{background:var(--card); border:1px solid var(--line); border-radius:20px 20px 0 0;
+    width:100%; max-width:640px; max-height:88vh; overflow-y:auto;
+    padding:18px 18px calc(env(safe-area-inset-bottom) + 18px)}
+  .modal h2{margin:0 0 14px; font-size:18px}
+  .modal .close{float:right; background:none; border:none; color:var(--muted);
+    font-size:22px; cursor:pointer; margin:-4px -4px 0 0}
+
+  .empty{text-align:center; color:var(--muted); padding:44px 20px; font-size:14px; line-height:1.6}
+  .empty .ico{font-size:40px; display:block; margin-bottom:10px}
+
+  .back{background:none; border:none; color:var(--accent); font-size:15px; font-weight:600;
+    cursor:pointer; padding:0 0 12px; font-family:inherit}
+  .newsitem{padding:11px 0; border-bottom:1px solid var(--line); display:block;
+    color:inherit; text-decoration:none}
+  .newsitem:last-child{border-bottom:none}
+  .switch{position:relative; width:50px; height:30px; flex-shrink:0}
+  .switch input{opacity:0; width:0; height:0; margin:0}
+  .switch span{position:absolute; inset:0; background:var(--card2); border:1px solid var(--line);
+    border-radius:99px; transition:.2s; cursor:pointer}
+  .switch span::before{content:''; position:absolute; width:24px; height:24px; border-radius:50%;
+    background:#fff; top:2px; left:2px; transition:.2s}
+  .switch input:checked + span{background:var(--up); border-color:var(--up)}
+  .switch input:checked + span::before{transform:translateX(20px)}
+  .chartwrap{position:relative; height:220px}
+  .chartwrap.short{height:170px}
+  .toast{position:fixed; left:50%; transform:translateX(-50%); bottom:100px; z-index:60;
+    background:var(--card2); border:1px solid var(--line); color:var(--text);
+    padding:10px 18px; border-radius:99px; font-size:13px; font-weight:600;
+    box-shadow:0 6px 24px rgba(0,0,0,.4)}
+</style>
+</head>
+<body>
+
+<header>
+  <h1 id="headerTitle">Moje Portfolio</h1>
+  <span id="refreshInfo"></span>
+</header>
+
+<main id="view"></main>
+
+<nav class="tabbar" id="tabbar">
+  <button data-tab="dash"><span class="ico">◔</span>Přehled</button>
+  <button data-tab="portfolio"><span class="ico">▤</span>Portfolio</button>
+  <button data-tab="watch"><span class="ico">★</span>Sledované</button>
+  <button data-tab="news"><span class="ico">✉</span>Zprávy</button>
+  <button data-tab="settings"><span class="ico">⚙</span>Nastavení</button>
+</nav>
+
+<div id="modalRoot"></div>
+
+<script>
+/* =========================================================
+   STAV A PERSISTENCE (localStorage)
+========================================================= */
+const LS_KEY = 'mojeportfolio-v1';
+
+function defaultState(){
+  return {
+    holdings: [],   // {id, symbol, name, type, currency, txs:[{id,kind,date,qty,price,fee}]}
+    watchlist: [],  // {id, symbol, name, target}
+    settings: { currency:'CZK', finnhubKey:'', alerts:false, dropPct:5 }
+  };
+}
+function loadState(){
+  try{
+    const s = JSON.parse(localStorage.getItem(LS_KEY));
+    if (s && s.holdings && s.settings) return s;
+  }catch(e){}
+  return defaultState();
+}
+const state = loadState();
+function save(){
+  localStorage.setItem(LS_KEY, JSON.stringify({
+    holdings: state.holdings, watchlist: state.watchlist, settings: state.settings
+  }));
+}
+
+// Běhová data (neukládají se)
+const quotes = {};      // symbol -> {price, prev, currency}
+const fx = {};          // 'USDCZK' -> kurz
+const divCache = {};    // symbol -> [{date(ms), amount}]
+let lastRefresh = null;
+let refreshing = false;
+let currentTab = 'dash';
+let detailId = null;    // id pozice v detailu
+const alertedToday = {};
+const charts = [];      // aktivní instance Chart.js
+
+const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
+
+/* =========================================================
+   FORMÁTOVÁNÍ
+========================================================= */
+const fmtMoney = (v, code, digits) => {
+  try{
+    return new Intl.NumberFormat('cs-CZ', {
+      style:'currency', currency:code,
+      maximumFractionDigits: digits ?? (Math.abs(v) >= 1 ? 2 : 4),
+      minimumFractionDigits: 0
+    }).format(v);
+  }catch(e){ return v.toFixed(2) + ' ' + code; }
+};
+const fmtPct = v => (v >= 0 ? '+' : '') + v.toFixed(2) + '\u00a0%';
+const fmtQty = v => new Intl.NumberFormat('cs-CZ', {maximumFractionDigits:8}).format(v);
+const fmtDate = ms => new Date(ms).toLocaleDateString('cs-CZ', {day:'numeric', month:'short', year:'numeric'});
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const cls = v => v >= 0 ? 'up' : 'down';
+
+/* =========================================================
+   API – Yahoo (přes serverless proxy) a Finnhub (přímo)
+========================================================= */
+async function yahoo(params){
+  const res = await fetch('/api/yahoo?' + new URLSearchParams(params));
+  if (!res.ok) throw new Error('Yahoo ' + res.status);
+  return res.json();
+}
+
+async function fetchQuote(symbol){
+  const j = await yahoo({endpoint:'chart', symbol, range:'1d', interval:'5m'});
+  const m = j?.chart?.result?.[0]?.meta;
+  if (!m || m.regularMarketPrice == null) throw new Error('no quote');
+  return {
+    symbol,
+    price: m.regularMarketPrice,
+    prev: m.chartPreviousClose ?? m.previousClose ?? m.regularMarketPrice,
+    currency: m.currency || 'USD'
+  };
+}
+
+const RANGES = [
+  {key:'1d',  label:'1D',  interval:'5m'},
+  {key:'1mo', label:'1M',  interval:'1d'},
+  {key:'6mo', label:'6M',  interval:'1d'},
+  {key:'1y',  label:'1R',  interval:'1d'},
+  {key:'5y',  label:'5R',  interval:'1wk'},
+];
+
+async function fetchHistory(symbol, rangeKey){
+  const r = RANGES.find(x => x.key === rangeKey) || RANGES[2];
+  const j = await yahoo({endpoint:'chart', symbol, range:r.key, interval:r.interval, events:'div'});
+  const res = j?.chart?.result?.[0];
+  if (!res) throw new Error('no history');
+  const points = [];
+  const ts = res.timestamp || [];
+  const closes = res.indicators?.quote?.[0]?.close || [];
+  for (let i = 0; i < ts.length; i++){
+    if (closes[i] != null) points.push({t: ts[i]*1000, c: closes[i]});
+  }
+  const dividends = Object.values(res.events?.dividends || {})
+    .map(d => ({date: d.date*1000, amount: d.amount}))
+    .sort((a,b) => a.date - b.date);
+  return {points, dividends};
+}
+
+async function fetchSearch(q){
+  const j = await yahoo({endpoint:'search', q});
+  return (j?.quotes || [])
+    .filter(x => x.symbol)
+    .map(x => ({
+      symbol: x.symbol,
+      name: x.shortname || x.longname || x.symbol,
+      exchange: x.exchDisp || x.exchange || '',
+      quoteType: x.quoteType || ''
+    }));
+}
+
+function fhDate(d){ return d.toISOString().slice(0,10); }
+
+async function fetchNews(symbol, daysBack){
+  const key = state.settings.finnhubKey;
+  if (!key) return [];
+  const to = new Date(), from = new Date(Date.now() - daysBack*86400e3);
+  const res = await fetch(`https://finnhub.io/api/v1/company-news?symbol=${encodeURIComponent(symbol)}&from=${fhDate(from)}&to=${fhDate(to)}&token=${encodeURIComponent(key)}`);
+  if (!res.ok) return [];
+  const j = await res.json();
+  return (Array.isArray(j) ? j : []).slice(0,12).map(n => ({
+    symbol, headline:n.headline, source:n.source, summary:n.summary,
+    url:n.url, date:n.datetime*1000
+  }));
+}
+
+async function fetchEarnings(symbol, daysAhead){
+  const key = state.settings.finnhubKey;
+  if (!key) return [];
+  const from = new Date(), to = new Date(Date.now() + daysAhead*86400e3);
+  const res = await fetch(`https://finnhub.io/api/v1/calendar/earnings?from=${fhDate(from)}&to=${fhDate(to)}&symbol=${encodeURIComponent(symbol)}&token=${encodeURIComponent(key)}`);
+  if (!res.ok) return [];
+  const j = await res.json();
+  return (j?.earningsCalendar || []).map(e => ({
+    symbol: e.symbol || symbol, date: e.date, eps: e.epsEstimate, hour: e.hour
+  })).sort((a,b) => (a.date||'').localeCompare(b.date||''));
+}
+
+/* =========================================================
+   VÝPOČTY PORTFOLIA
+========================================================= */
+const sortedTxs = h => [...h.txs].sort((a,b) => a.date - b.date);
+
+function holdingQty(h){
+  return h.txs.reduce((s,t) => s + (t.kind === 'buy' ? t.qty : -t.qty), 0);
+}
+function avgCost(h){
+  let qty = 0, cost = 0;
+  for (const t of sortedTxs(h)){
+    if (t.kind === 'buy'){ cost += t.qty*t.price + (t.fee||0); qty += t.qty; }
+    else { const a = qty > 0 ? cost/qty : 0; cost -= a*t.qty; qty -= t.qty; }
+  }
+  return qty > 0 ? cost/qty : 0;
+}
+function realizedPL(h){
+  let qty = 0, cost = 0, real = 0;
+  for (const t of sortedTxs(h)){
+    if (t.kind === 'buy'){ cost += t.qty*t.price + (t.fee||0); qty += t.qty; }
+    else {
+      const a = qty > 0 ? cost/qty : 0;
+      real += (t.price - a)*t.qty - (t.fee||0);
+      cost -= a*t.qty; qty -= t.qty;
+    }
+  }
+  return real;
+}
+function toDisplay(amount, fromCur){
+  const target = state.settings.currency;
+  if (fromCur === target) return amount;
+  const r = fx[fromCur + target];
+  return r ? amount * r : amount;
+}
+const hCurrency  = h => quotes[h.symbol]?.currency || h.currency;
+const hPrice     = h => quotes[h.symbol]?.price ?? avgCost(h);
+const hValue     = h => toDisplay(hPrice(h) * holdingQty(h), hCurrency(h));
+const hCost      = h => toDisplay(avgCost(h) * holdingQty(h), h.currency);
+const hDayChange = h => {
+  const q = quotes[h.symbol]; if (!q) return 0;
+  return toDisplay((q.price - q.prev) * holdingQty(h), q.currency);
+};
+const qChangePct = q => q.prev ? (q.price - q.prev)/q.prev*100 : 0;
+
+const activeHoldings = () => state.holdings.filter(h => holdingQty(h) > 1e-9);
+
+function totals(){
+  const hs = activeHoldings();
+  const value = hs.reduce((s,h) => s + hValue(h), 0);
+  const cost  = hs.reduce((s,h) => s + hCost(h), 0);
+  const day   = hs.reduce((s,h) => s + hDayChange(h), 0);
+  const realized = state.holdings.reduce((s,h) => s + toDisplay(realizedPL(h), h.currency), 0);
+  return {
+    value, cost, day, realized,
+    pl: value - cost,
+    plPct: cost ? (value-cost)/cost*100 : 0,
+    dayPct: (value - day) ? day/(value-day)*100 : 0
+  };
+}
+
+function trailingDividends(){
+  let sum = 0;
+  for (const h of activeHoldings()){
+    const divs = divCache[h.symbol] || [];
+    const total = divs.reduce((s,d) => s + d.amount, 0) * holdingQty(h);
+    sum += toDisplay(total, h.currency);
+  }
+  return sum;
+}
+
+/* =========================================================
+   REFRESH DAT + ALERTY
+========================================================= */
+async function refreshAll(){
+  if (refreshing) return;
+  refreshing = true;
+  setRefreshInfo();
+
+  const symbols = [...new Set([
+    ...state.holdings.map(h => h.symbol),
+    ...state.watchlist.map(w => w.symbol)
+  ])];
+
+  await Promise.allSettled(symbols.map(async s => { quotes[s] = await fetchQuote(s); }));
+
+  // Směnné kurzy do zobrazovací měny
+  const target = state.settings.currency;
+  const curs = new Set(state.holdings.map(h => h.currency));
+  Object.values(quotes).forEach(q => curs.add(q.currency));
+  await Promise.allSettled([...curs].filter(c => c !== target).map(async c => {
+    const q = await fetchQuote(`${c}${target}=X`);
+    fx[c + target] = q.price;
+  }));
+
+  lastRefresh = new Date();
+  refreshing = false;
+  setRefreshInfo();
+  checkAlerts();
+  if (currentTab === 'dash' || currentTab === 'portfolio' || currentTab === 'watch') render();
+}
+
+async function refreshDividends(){
+  await Promise.allSettled(activeHoldings()
+    .filter(h => h.type !== 'Krypto')
+    .map(async h => { divCache[h.symbol] = (await fetchHistory(h.symbol, '1y')).dividends; }));
+}
+
+function setRefreshInfo(){
+  const el = document.getElementById('refreshInfo');
+  el.classList.toggle('spin', refreshing);
+  el.textContent = refreshing ? 'aktualizuji…'
+    : lastRefresh ? lastRefresh.toLocaleTimeString('cs-CZ') : '';
+}
+
+function notify(key, title, body){
+  const today = new Date().toDateString();
+  if (alertedToday[key] === today) return;
+  alertedToday[key] = today;
+  if ('Notification' in window && Notification.permission === 'granted'){
+    try{ new Notification(title, {body}); }catch(e){}
+  }
+  toast(title);
+}
+
+function checkAlerts(){
+  if (!state.settings.alerts) return;
+  for (const h of activeHoldings()){
+    const q = quotes[h.symbol]; if (!q) continue;
+    const pct = qChangePct(q);
+    if (pct <= -state.settings.dropPct)
+      notify('drop-'+h.symbol, `📉 ${h.symbol} dnes ${fmtPct(pct)}`,
+        `${h.name}: ${fmtMoney(q.price, q.currency)}`);
+  }
+  for (const w of state.watchlist){
+    const q = quotes[w.symbol];
+    if (w.target && q && q.price <= w.target)
+      notify('target-'+w.symbol, `🎯 ${w.symbol} pod cílovou cenou`,
+        `${fmtMoney(q.price, q.currency)} ≤ cíl ${fmtMoney(w.target, q.currency)}`);
+  }
+}
+
+function toast(msg){
+  const t = document.createElement('div');
+  t.className = 'toast'; t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 2800);
+}
+
+/* =========================================================
+   RENDER – společné
+========================================================= */
+const view = document.getElementById('view');
+
+function destroyCharts(){ charts.forEach(c => { try{c.destroy()}catch(e){} }); charts.length = 0; }
+
+function render(){
+  destroyCharts();
+  if (detailId){ renderDetail(); return; }
+  ({dash:renderDash, portfolio:renderPortfolio, watch:renderWatch,
+    news:renderNews, settings:renderSettings}[currentTab])();
+  document.querySelectorAll('#tabbar button').forEach(b =>
+    b.classList.toggle('active', b.dataset.tab === currentTab));
+}
+
+document.getElementById('tabbar').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  detailId = null; currentTab = b.dataset.tab; render();
+  window.scrollTo(0,0);
+});
+
+const CHART_GRID = 'rgba(91,104,132,.15)';
+const CHART_TICK = '#5b6884';
+
+/* =========================================================
+   PŘEHLED
+========================================================= */
+function renderDash(){
+  document.getElementById('headerTitle').textContent = 'Moje Portfolio';
+  const t = totals();
+  const code = state.settings.currency;
+  const hs = activeHoldings();
+
+  const movers = hs.filter(h => quotes[h.symbol])
+    .sort((a,b) => Math.abs(qChangePct(quotes[b.symbol])) - Math.abs(qChangePct(quotes[a.symbol])))
+    .slice(0,3);
+
+  const byType = ['Akcie','ETF','Krypto'].map(type => ({
+    type, value: hs.filter(h => h.type === type).reduce((s,h) => s + hValue(h), 0)
+  })).filter(x => x.value > 0);
+
+  view.innerHTML = `
+    <div class="card">
+      <div class="label">Hodnota portfolia</div>
+      <div class="big num">${fmtMoney(t.value, code, 0)}</div>
+      <div style="display:flex; gap:18px; margin:10px 0 12px">
+        <div><div class="label">Dnes</div>
+          <span class="pill ${cls(t.day)} num">${fmtMoney(t.day, code, 0)} (${fmtPct(t.dayPct)})</span></div>
+        <div><div class="label">Celkem</div>
+          <span class="pill ${cls(t.pl)} num">${fmtMoney(t.pl, code, 0)} (${fmtPct(t.plPct)})</span></div>
+      </div>
+      <div class="grid2" style="grid-template-columns:1fr 1fr 1fr">
+        <div class="stat"><div class="label">Vloženo</div><div class="v num">${fmtMoney(t.cost, code, 0)}</div></div>
+        <div class="stat"><div class="label">Realizováno</div><div class="v num ${cls(t.realized)}">${fmtMoney(t.realized, code, 0)}</div></div>
+        <div class="stat"><div class="label">Pozic</div><div class="v num">${hs.length}</div></div>
+      </div>
+    </div>
+
+    ${byType.length ? `
+    <div class="card">
+      <h3>Rozložení portfolia</h3>
+      <div class="chartwrap short"><canvas id="allocChart"></canvas></div>
+      ${byType.map(x => `
+        <div class="row" style="cursor:default">
+          <div class="l"><span class="sym">${x.type}</span></div>
+          <div class="r"><span class="small muted num">${(t.value ? x.value/t.value*100 : 0).toFixed(1)} %</span>
+            &nbsp; <b class="num">${fmtMoney(x.value, code, 0)}</b></div>
+        </div>`).join('')}
+    </div>` : ''}
+
+    ${movers.length ? `
+    <div class="card">
+      <h3>Největší pohyby dne</h3>
+      ${movers.map(h => rowHolding(h)).join('')}
+    </div>` : ''}
+
+    <div class="card" onclick="openDividends()" style="cursor:pointer">
+      <div style="display:flex; align-items:center; gap:12px">
+        <span style="font-size:26px">💶</span>
+        <div style="flex:1">
+          <div class="label">Dividendy (12 měsíců)</div>
+          <div style="font-size:20px; font-weight:800" class="num up">${fmtMoney(trailingDividends(), code, 0)}</div>
+        </div>
+        <span class="muted">›</span>
+      </div>
+    </div>
+
+    ${hs.length ? '' : `
+    <div class="empty"><span class="ico">📈</span>
+      Zatím žádné investice.<br>Přidej první pozici v záložce <b>Portfolio</b>.</div>`}
+  `;
+
+  if (byType.length){
+    charts.push(new Chart(document.getElementById('allocChart'), {
+      type:'doughnut',
+      data:{ labels: byType.map(x=>x.type),
+        datasets:[{ data: byType.map(x=>x.value),
+          backgroundColor:['#5b8cff','#3ddc97','#f5b941'], borderWidth:0 }]},
+      options:{ cutout:'68%', plugins:{legend:{display:false}}, maintainAspectRatio:false }
+    }));
+  }
+}
+
+function rowHolding(h){
+  const q = quotes[h.symbol];
+  const pct = q ? qChangePct(q) : 0;
+  return `
+    <div class="row" onclick="openDetail('${h.id}')">
+      <div class="l">
+        <div class="sym">${esc(h.symbol)}</div>
+        <div class="name">${esc(h.name)}</div>
+      </div>
+      <div class="r">
+        <div class="num" style="font-weight:600">${q ? fmtMoney(q.price, q.currency) : '…'}</div>
+        ${q ? `<span class="pill ${cls(pct)} num">${fmtPct(pct)}</span>` : ''}
+      </div>
+    </div>`;
+}
+
+/* =========================================================
+   PORTFOLIO
+========================================================= */
+function renderPortfolio(){
+  document.getElementById('headerTitle').textContent = 'Portfolio';
+  const code = state.settings.currency;
+  const groups = ['Akcie','ETF','Krypto']
+    .map(type => ({type, items: activeHoldings().filter(h => h.type === type)}))
+    .filter(g => g.items.length);
+
+  view.innerHTML = `
+    <button class="btn primary" onclick="openSearch('holding')" style="margin-bottom:14px">＋ Přidat pozici</button>
+    ${groups.map(g => `
+      <div class="card">
+        <h3>${g.type}</h3>
+        ${g.items.map(h => {
+          const q = quotes[h.symbol];
+          const value = hValue(h), cost = hCost(h);
+          const plPct = cost ? (value-cost)/cost*100 : 0;
+          const dayPct = q ? qChangePct(q) : 0;
+          return `
+          <div class="row" onclick="openDetail('${h.id}')">
+            <div class="l">
+              <div class="sym">${esc(h.symbol)}</div>
+              <div class="name num">${fmtQty(holdingQty(h))} ks · ø ${fmtMoney(avgCost(h), h.currency)}</div>
+            </div>
+            <div class="r">
+              <div class="num" style="font-weight:600">${fmtMoney(value, code, 0)}</div>
+              <span class="pill ${cls(dayPct)} num">${fmtPct(dayPct)}</span>
+              <span class="small num ${cls(plPct)}">${fmtPct(plPct)}</span>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>`).join('')}
+    ${groups.length ? '' : `
+      <div class="empty"><span class="ico">💼</span>
+        Prázdné portfolio.<br>Tlačítkem nahoře přidej akcii, ETF nebo krypto.</div>`}
+  `;
+}
+
+/* =========================================================
+   DETAIL AKTIVA
+========================================================= */
+let detailRange = '6mo';
+let detailCache = {};   // {points, dividends} pro aktuální symbol+range
+
+function openDetail(id){ detailId = id; detailRange = '6mo'; detailCache = {}; render(); window.scrollTo(0,0); }
+function closeDetail(){ detailId = null; render(); }
+function openDividends(){ detailId = 'DIVIDENDS'; render(); window.scrollTo(0,0); }
+
+async function renderDetail(){
+  if (detailId === 'DIVIDENDS') return renderDividendsPage();
+  const h = state.holdings.find(x => x.id === detailId);
+  if (!h){ closeDetail(); return; }
+  document.getElementById('headerTitle').textContent = h.symbol;
+
+  const q = quotes[h.symbol];
+  const code = state.settings.currency;
+  const value = hValue(h), cost = hCost(h), pl = value - cost;
+  const plPct = cost ? pl/cost*100 : 0;
+  const real = toDisplay(realizedPL(h), h.currency);
+
+  view.innerHTML = `
+    <button class="back" onclick="closeDetail()">‹ Zpět</button>
+
+    <div class="card">
+      <div class="name" style="max-width:none">${esc(h.name)}</div>
+      <div class="big num">${q ? fmtMoney(q.price, q.currency) : '…'}</div>
+      ${q ? `<span class="pill ${cls(qChangePct(q))} num">
+        ${fmtMoney(q.price-q.prev, q.currency)} (${fmtPct(qChangePct(q))}) dnes</span>` : ''}
+      <div class="seg" style="margin-top:14px">
+        ${RANGES.map(r => `<button class="${r.key===detailRange?'active':''}"
+          onclick="setRange('${r.key}')">${r.label}</button>`).join('')}
+      </div>
+      <div class="chartwrap"><canvas id="priceChart"></canvas></div>
+    </div>
+
+    <div class="card">
+      <h3>Moje pozice</h3>
+      <div class="grid2">
+        <div class="stat"><div class="label">Množství</div><div class="v num">${fmtQty(holdingQty(h))}</div></div>
+        <div class="stat"><div class="label">Prům. cena</div><div class="v num">${fmtMoney(avgCost(h), h.currency)}</div></div>
+        <div class="stat"><div class="label">Hodnota</div><div class="v num">${fmtMoney(value, code, 0)}</div></div>
+        <div class="stat"><div class="label">Vloženo</div><div class="v num">${fmtMoney(cost, code, 0)}</div></div>
+        <div class="stat"><div class="label">Nereal. P/L</div>
+          <div class="v num ${cls(pl)}">${fmtMoney(pl, code, 0)} (${fmtPct(plPct)})</div></div>
+        <div class="stat"><div class="label">Real. P/L</div>
+          <div class="v num ${cls(real)}">${fmtMoney(real, code, 0)}</div></div>
+      </div>
+    </div>
+
+    <div id="earnBox"></div>
+
+    <div class="card">
+      <h3 style="display:flex; justify-content:space-between; align-items:center">Transakce
+        <button class="iconbtn" onclick="openTxModal('${h.id}')">＋</button></h3>
+      ${sortedTxs(h).reverse().map(t => `
+        <div class="row" style="cursor:default">
+          <div class="l">
+            <div class="sym">${t.kind==='buy' ? '🔵 Nákup' : '🟠 Prodej'} <span class="num">${fmtQty(t.qty)} ks</span></div>
+            <div class="name">${fmtDate(t.date)}${t.fee ? ' · poplatek ' + fmtMoney(t.fee, h.currency) : ''}</div>
+          </div>
+          <div class="r">
+            <span class="num">${fmtMoney(t.price, h.currency)}</span>
+            <button class="iconbtn" style="width:30px;height:30px;font-size:14px;margin-left:8px"
+              onclick="deleteTx('${h.id}','${t.id}')">🗑</button>
+          </div>
+        </div>`).join('') || '<div class="muted small">Žádné transakce</div>'}
+    </div>
+
+    <div id="divBox"></div>
+    <div id="newsBox"></div>
+
+    <button class="btn danger" onclick="deleteHolding('${h.id}')">Odstranit pozici</button>
+  `;
+
+  drawPriceChart(h);
+  loadDetailExtras(h);
+}
+
+function setRange(r){ detailRange = r; detailCache = {}; renderDetail(); }
+
+async function drawPriceChart(h){
+  const canvas = document.getElementById('priceChart');
+  if (!canvas) return;
+  try{
+    if (!detailCache.points) detailCache = await fetchHistory(h.symbol, detailRange);
+  }catch(e){ return; }
+  const pts = detailCache.points || [];
+  if (!pts.length || !document.getElementById('priceChart')) return;
+
+  const isUp = pts[pts.length-1].c >= pts[0].c;
+  const color = isUp ? '#3ddc97' : '#ff6b6b';
+  const labels = pts.map(p => {
+    const d = new Date(p.t);
+    return detailRange === '1d'
+      ? d.toLocaleTimeString('cs-CZ', {hour:'2-digit', minute:'2-digit'})
+      : d.toLocaleDateString('cs-CZ', {day:'numeric', month:'numeric', year:'2-digit'});
+  });
+
+  destroyChartById('priceChart');
+  const ctx = canvas.getContext('2d');
+  const grad = ctx.createLinearGradient(0,0,0,220);
+  grad.addColorStop(0, color + '40'); grad.addColorStop(1, color + '00');
+
+  charts.push(new Chart(canvas, {
+    type:'line',
+    data:{ labels, datasets:[{ data: pts.map(p=>p.c), borderColor:color, backgroundColor:grad,
+      fill:true, pointRadius:0, borderWidth:2, tension:.25 }]},
+    options:{
+      maintainAspectRatio:false, interaction:{intersect:false, mode:'index'},
+      plugins:{ legend:{display:false},
+        tooltip:{ callbacks:{ label: c => fmtMoney(c.parsed.y, h.currency) }}},
+      scales:{
+        x:{ grid:{display:false}, ticks:{color:CHART_TICK, maxTicksLimit:5, maxRotation:0}},
+        y:{ grid:{color:CHART_GRID}, ticks:{color:CHART_TICK, maxTicksLimit:5}}
+      }
+    }
+  }));
+}
+
+function destroyChartById(id){
+  const c = Chart.getChart(id);
+  if (c){ try{c.destroy()}catch(e){} }
+}
+
+async function loadDetailExtras(h){
+  // Dividendy (z roční historie)
+  try{
+    const divs = (detailRange === '1y' && detailCache.dividends)
+      ? detailCache.dividends
+      : (await fetchHistory(h.symbol, '1y')).dividends;
+    divCache[h.symbol] = divs;
+    const box = document.getElementById('divBox');
+    if (box && divs.length){
+      box.innerHTML = `<div class="card"><h3>Vyplacené dividendy (12 m)</h3>
+        ${[...divs].reverse().slice(0,6).map(d => `
+          <div class="row" style="cursor:default">
+            <span class="small">${fmtDate(d.date)}</span>
+            <span class="num up small">${fmtMoney(d.amount, h.currency)} / ks</span>
+          </div>`).join('')}</div>`;
+    }
+  }catch(e){}
+
+  // Earnings + zprávy (Finnhub)
+  if (!state.settings.finnhubKey || h.symbol.includes('-')) return;
+  try{
+    const [earn, news] = await Promise.all([
+      fetchEarnings(h.symbol, 90), fetchNews(h.symbol, 14)
+    ]);
+    const eBox = document.getElementById('earnBox');
+    if (eBox && earn.length){
+      const e = earn[0];
+      eBox.innerHTML = `<div class="card" style="display:flex; gap:12px; align-items:center">
+        <span style="font-size:24px">🗓</span>
+        <div><b>Kvartální výsledky</b>
+          <div class="small muted">${esc(e.date)}${e.eps != null ? ' · odhad EPS ' + e.eps.toFixed(2) : ''}</div>
+        </div></div>`;
+    }
+    const nBox = document.getElementById('newsBox');
+    if (nBox && news.length){
+      nBox.innerHTML = `<div class="card"><h3>Zprávy</h3>
+        ${news.slice(0,5).map(n => `
+          <a class="newsitem" href="${esc(n.url)}" target="_blank" rel="noopener">
+            <div style="font-weight:600; font-size:13px">${esc(n.headline)}</div>
+            <div class="tiny muted">${esc(n.source)} · ${fmtDate(n.date)}</div>
+          </a>`).join('')}</div>`;
+    }
+  }catch(e){}
+}
+
+function deleteTx(hid, tid){
+  if (!confirm('Smazat tuto transakci?')) return;
+  const h = state.holdings.find(x => x.id === hid); if (!h) return;
+  h.txs = h.txs.filter(t => t.id !== tid);
+  save(); renderDetail();
+}
+function deleteHolding(hid){
+  const h = state.holdings.find(x => x.id === hid); if (!h) return;
+  if (!confirm(`Opravdu odstranit ${h.symbol} včetně všech transakcí?`)) return;
+  state.holdings = state.holdings.filter(x => x.id !== hid);
+  save(); closeDetail();
+}
+
+/* =========================================================
+   DIVIDENDOVÁ STRÁNKA
+========================================================= */
+async function renderDividendsPage(){
+  document.getElementById('headerTitle').textContent = 'Dividendy';
+  const code = state.settings.currency;
+  view.innerHTML = `<button class="back" onclick="closeDetail()">‹ Zpět</button>
+    <div class="empty">Načítám historii dividend…</div>`;
+
+  await refreshDividends();
+  if (detailId !== 'DIVIDENDS') return;
+
+  const bySymbol = activeHoldings().map(h => {
+    const divs = divCache[h.symbol] || [];
+    return { symbol: h.symbol,
+      income: toDisplay(divs.reduce((s,d) => s + d.amount, 0) * holdingQty(h), h.currency) };
+  }).filter(x => x.income > 0).sort((a,b) => b.income - a.income);
+
+  const monthly = {};
+  for (const h of activeHoldings()){
+    for (const d of (divCache[h.symbol] || [])){
+      const dt = new Date(d.date);
+      const k = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}`;
+      monthly[k] = (monthly[k] || 0) + toDisplay(d.amount * holdingQty(h), h.currency);
+    }
+  }
+  const months = Object.keys(monthly).sort();
+  const total = trailingDividends();
+
+  view.innerHTML = `
+    <button class="back" onclick="closeDetail()">‹ Zpět</button>
+    <div class="card">
+      <div class="label">Příjem za posledních 12 měsíců</div>
+      <div class="big num up">${fmtMoney(total, code, 0)}</div>
+      <div class="small muted num">≈ ${fmtMoney(total/12, code, 0)} měsíčně</div>
+    </div>
+    ${months.length ? `<div class="card"><h3>Po měsících</h3>
+      <div class="chartwrap short"><canvas id="divChart"></canvas></div></div>` : ''}
+    ${bySymbol.length ? `<div class="card"><h3>Podle titulu</h3>
+      ${bySymbol.map(x => `<div class="row" style="cursor:default">
+        <span class="sym">${esc(x.symbol)}</span>
+        <span class="num up">${fmtMoney(x.income, code, 0)}</span></div>`).join('')}</div>`
+      : '<div class="empty"><span class="ico">💶</span>Za posledních 12 měsíců nebyly nalezeny žádné výplaty dividend.</div>'}
+    <div class="tiny muted" style="padding:0 6px">Počítáno z historie výplat za poslední rok a aktuálně drženého množství – orientační odhad ročního příjmu.</div>
+  `;
+
+  if (months.length){
+    charts.push(new Chart(document.getElementById('divChart'), {
+      type:'bar',
+      data:{ labels: months.map(m => m.slice(5)+'/'+m.slice(2,4)),
+        datasets:[{ data: months.map(m => monthly[m]), backgroundColor:'#3ddc97', borderRadius:4 }]},
+      options:{ maintainAspectRatio:false, plugins:{legend:{display:false}},
+        scales:{ x:{grid:{display:false}, ticks:{color:CHART_TICK}},
+                 y:{grid:{color:CHART_GRID}, ticks:{color:CHART_TICK, maxTicksLimit:5}}}}
+    }));
+  }
+}
+
+/* =========================================================
+   WATCHLIST
+========================================================= */
+function renderWatch(){
+  document.getElementById('headerTitle').textContent = 'Sledované';
+  view.innerHTML = `
+    <button class="btn primary" onclick="openSearch('watch')" style="margin-bottom:14px">＋ Sledovat titul</button>
+    ${state.watchlist.length ? `<div class="card">
+      ${state.watchlist.map(w => {
+        const q = quotes[w.symbol];
+        const reached = w.target && q && q.price <= w.target;
+        return `
+        <div class="row" onclick="openWatchEdit('${w.id}')">
+          <div class="l">
+            <div class="sym">${esc(w.symbol)}</div>
+            <div class="name">${esc(w.name)}</div>
+            ${w.target ? `<div class="tiny ${reached ? 'up' : 'muted'} num">
+              ${reached ? '✓' : '🎯'} cíl ${fmtMoney(w.target, q?.currency || 'USD')}</div>` : ''}
+          </div>
+          <div class="r">
+            <div class="num" style="font-weight:600">${q ? fmtMoney(q.price, q.currency) : '…'}</div>
+            ${q ? `<span class="pill ${cls(qChangePct(q))} num">${fmtPct(qChangePct(q))}</span>` : ''}
+          </div>
+        </div>`;
+      }).join('')}</div>`
+    : `<div class="empty"><span class="ico">★</span>
+        Žádné sledované tituly.<br>Přidej akcie, ETF nebo krypto, které zvažuješ k nákupu –<br>
+        s cílovou cenou dostaneš upozornění na pokles.</div>`}
+  `;
+}
+
+function openWatchEdit(id){
+  const w = state.watchlist.find(x => x.id === id); if (!w) return;
+  const q = quotes[w.symbol];
+  openModal(`
+    <h2>${esc(w.symbol)}</h2>
+    <div class="muted small" style="margin-bottom:12px">${esc(w.name)}
+      ${q ? ' · aktuálně ' + fmtMoney(q.price, q.currency) : ''}</div>
+    <label class="f">Cílová nákupní cena ${q ? '(' + q.currency + ')' : ''}</label>
+    <input id="wTarget" type="text" inputmode="decimal" value="${w.target ?? ''}" placeholder="např. 150">
+    <div class="tiny muted" style="margin-bottom:14px">Když cena klesne pod cíl, dostaneš upozornění (pokud jsou zapnutá v Nastavení).</div>
+    <button class="btn primary" onclick="saveWatchTarget('${w.id}')">Uložit</button>
+    <div style="height:8px"></div>
+    <button class="btn danger" onclick="removeWatch('${w.id}')">Přestat sledovat</button>
+  `);
+}
+function saveWatchTarget(id){
+  const w = state.watchlist.find(x => x.id === id); if (!w) return;
+  const v = parseFloat(document.getElementById('wTarget').value.replace(',', '.'));
+  w.target = isFinite(v) && v > 0 ? v : null;
+  save(); closeModal(); render();
+}
+function removeWatch(id){
+  state.watchlist = state.watchlist.filter(x => x.id !== id);
+  save(); closeModal(); render();
+}
+
+/* =========================================================
+   ZPRÁVY + EARNINGS
+========================================================= */
+async function renderNews(){
+  document.getElementById('headerTitle').textContent = 'Zprávy';
+  if (!state.settings.finnhubKey){
+    view.innerHTML = `<div class="empty"><span class="ico">🔑</span>
+      Zprávy a kalendář výsledků vyžadují zdarma API klíč z <b>finnhub.io</b>.<br>
+      Vlož ho v záložce Nastavení – ceny a grafy fungují i bez něj.</div>`;
+    return;
+  }
+  const symbols = [...new Set([
+    ...activeHoldings().map(h => h.symbol),
+    ...state.watchlist.map(w => w.symbol)
+  ])].filter(s => !s.includes('-')).slice(0, 15);
+
+  if (!symbols.length){
+    view.innerHTML = `<div class="empty"><span class="ico">📰</span>
+      Přidej akcie do portfolia nebo na watchlist<br>a tady uvidíš relevantní zprávy a termíny výsledků.</div>`;
+    return;
+  }
+
+  view.innerHTML = `<div class="empty">Načítám zprávy…</div>`;
+
+  let allNews = [], allEarn = [];
+  for (const s of symbols){
+    try{
+      const [n, e] = await Promise.all([fetchNews(s, 5), fetchEarnings(s, 45)]);
+      allNews.push(...n.slice(0,4)); allEarn.push(...e);
+    }catch(err){}
+  }
+  if (currentTab !== 'news' || detailId) return;
+
+  allNews.sort((a,b) => b.date - a.date);
+  allEarn.sort((a,b) => (a.date||'').localeCompare(b.date||''));
+
+  view.innerHTML = `
+    ${allEarn.length ? `<div class="card"><h3>Nadcházející kvartální výsledky</h3>
+      ${allEarn.slice(0,10).map(e => `
+        <div class="row" style="cursor:default">
+          <div class="l"><div class="sym">🗓 ${esc(e.symbol)}</div>
+            <div class="name">${esc(e.date || '')}${e.eps != null ? ' · odhad EPS ' + e.eps.toFixed(2) : ''}</div></div>
+        </div>`).join('')}</div>` : ''}
+    <div class="card"><h3>Zprávy k tvým titulům</h3>
+      ${allNews.length ? allNews.slice(0,40).map(n => `
+        <a class="newsitem" href="${esc(n.url)}" target="_blank" rel="noopener">
+          <div class="tiny" style="margin-bottom:3px">
+            <span class="pill" style="background:rgba(91,140,255,.16); color:var(--accent)">${esc(n.symbol)}</span>
+            <span class="muted"> ${fmtDate(n.date)}</span></div>
+          <div style="font-weight:600; font-size:13px">${esc(n.headline)}</div>
+          ${n.summary ? `<div class="tiny muted" style="margin-top:2px; display:-webkit-box;
+            -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden">${esc(n.summary)}</div>` : ''}
+          <div class="tiny" style="color:var(--faint); margin-top:2px">${esc(n.source)}</div>
+        </a>`).join('') : '<div class="muted small">Žádné čerstvé zprávy.</div>'}
+    </div>`;
+}
+
+/* =========================================================
+   NASTAVENÍ
+========================================================= */
+function renderSettings(){
+  document.getElementById('headerTitle').textContent = 'Nastavení';
+  const s = state.settings;
+  view.innerHTML = `
+    <div class="card">
+      <h3>Měna portfolia</h3>
+      <div class="seg" style="margin:0">
+        ${['CZK','EUR','USD'].map(c => `<button class="${s.currency===c?'active':''}"
+          onclick="setCurrency('${c}')">${c}</button>`).join('')}
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Zprávy a výsledky</h3>
+      <label class="f">Finnhub API klíč</label>
+      <input id="fhKey" type="password" value="${esc(s.finnhubKey)}" placeholder="vlož klíč z finnhub.io"
+        autocomplete="off" onchange="saveFhKey()">
+      <div class="tiny muted">Zdarma účet na <b>finnhub.io</b> → zkopíruj API klíč. Ceny, grafy a dividendy fungují i bez klíče – ten je jen pro firemní zprávy a kalendář kvartálních výsledků.</div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center">
+        <div><b>Upozornění</b>
+          <div class="tiny muted">pokles pozice / dosažení cílové ceny</div></div>
+        <label class="switch"><input type="checkbox" ${s.alerts ? 'checked' : ''}
+          onchange="toggleAlerts(this.checked)"><span></span></label>
+      </div>
+      ${s.alerts ? `
+        <div style="margin-top:14px">
+          <label class="f">Upozornit při denním poklesu o <b id="dropVal">${s.dropPct}</b> % a více</label>
+          <input type="range" min="1" max="20" step="1" value="${s.dropPct}"
+            oninput="document.getElementById('dropVal').textContent=this.value"
+            onchange="setDropPct(this.value)" style="margin:0; padding:0">
+        </div>
+        <div class="tiny muted" style="margin-top:8px">Upozornění se vyhodnocují, když je aplikace otevřená. Systémové notifikace na iOS fungují, když je appka přidaná na plochu (iOS 16.4+).</div>` : ''}
+    </div>
+
+    <div class="card">
+      <h3>Zdroje dat</h3>
+      <div class="row" style="cursor:default"><span class="muted small">Ceny a grafy</span><span class="small">Yahoo Finance</span></div>
+      <div class="row" style="cursor:default"><span class="muted small">Zprávy a výsledky</span><span class="small">Finnhub</span></div>
+      <div class="row" style="cursor:default"><span class="muted small">Obnova cen</span><span class="small">každých 30 s</span></div>
+      <div class="row" style="cursor:default"><span class="muted small">Uložení dat</span><span class="small">lokálně v zařízení</span></div>
+    </div>
+
+    <div class="card">
+      <h3>Záloha dat</h3>
+      <button class="btn ghost" onclick="exportData()" style="margin-bottom:8px">Exportovat zálohu (JSON)</button>
+      <button class="btn ghost" onclick="document.getElementById('importFile').click()">Importovat zálohu</button>
+      <input type="file" id="importFile" accept=".json" style="display:none" onchange="importData(this)">
+      <div class="tiny muted" style="margin-top:8px">Data jsou uložená jen v tomto prohlížeči. Před smazáním dat Safari nebo přechodem na jiné zařízení si udělej export.</div>
+    </div>
+
+    <div class="tiny muted" style="text-align:center; padding:6px">
+      Ceny některých burz mohou být zpožděné o 15–20 min.<br>Aplikace neslouží jako investiční poradenství.</div>
+  `;
+}
+function setCurrency(c){ state.settings.currency = c; save(); refreshAll().then(render); render(); }
+function saveFhKey(){ state.settings.finnhubKey = document.getElementById('fhKey').value.trim(); save(); }
+function toggleAlerts(on){
+  state.settings.alerts = on; save();
+  if (on && 'Notification' in window && Notification.permission === 'default')
+    Notification.requestPermission();
+  renderSettings();
+}
+function setDropPct(v){ state.settings.dropPct = parseInt(v) || 5; save(); }
+
+function exportData(){
+  const blob = new Blob([JSON.stringify({holdings:state.holdings, watchlist:state.watchlist, settings:state.settings}, null, 2)],
+    {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'moje-portfolio-zaloha.json';
+  a.click();
+}
+function importData(input){
+  const file = input.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try{
+      const d = JSON.parse(reader.result);
+      if (!d.holdings || !d.settings) throw 0;
+      state.holdings = d.holdings; state.watchlist = d.watchlist || []; state.settings = d.settings;
+      save(); toast('Záloha načtena ✓'); refreshAll(); render();
+    }catch(e){ toast('Soubor se nepodařilo načíst'); }
+  };
+  reader.readAsText(file);
+}
+
+/* =========================================================
+   MODÁLY – vyhledávání a transakce
+========================================================= */
+const modalRoot = document.getElementById('modalRoot');
+function openModal(html){
+  modalRoot.innerHTML = `<div class="modal-bg" onclick="if(event.target===this)closeModal()">
+    <div class="modal"><button class="close" onclick="closeModal()">✕</button>${html}</div></div>`;
+}
+function closeModal(){ modalRoot.innerHTML = ''; }
+
+let searchMode = 'holding'; // 'holding' | 'watch'
+function openSearch(mode){
+  searchMode = mode;
+  openModal(`
+    <h2>${mode === 'watch' ? 'Sledovat titul' : 'Přidat pozici'}</h2>
+    <input id="searchQ" type="text" placeholder="Hledej: Apple, VWCE, bitcoin…"
+      autocomplete="off" autocapitalize="off">
+    <button class="btn primary" onclick="doSearch()">Hledat</button>
+    <div class="tiny muted" style="margin-top:10px">Evropská ETF s příponou burzy (VWCE.DE, CSPX.AS), pražská burza .PR (CEZ.PR), krypto jako BTC-USD.</div>
+    <div id="searchResults" style="margin-top:12px"></div>
+  `);
+  const inp = document.getElementById('searchQ');
+  inp.focus();
+  inp.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+}
+
+async function doSearch(){
+  const q = document.getElementById('searchQ').value.trim();
+  if (!q) return;
+  const box = document.getElementById('searchResults');
+  box.innerHTML = '<div class="muted small">Hledám…</div>';
+  try{
+    const results = await fetchSearch(q);
+    window._searchResults = results;
+    box.innerHTML = results.length ? results.map((r,i) => `
+      <div class="row" onclick="pickResult(${i})">
+        <div class="l"><div class="sym">${esc(r.symbol)}</div>
+          <div class="name">${esc(r.name)}</div></div>
+        <div class="r tiny muted">${esc(r.exchange)}</div>
+      </div>`).join('') : '<div class="muted small">Nic nenalezeno.</div>';
+  }catch(e){ box.innerHTML = '<div class="muted small">Vyhledávání selhalo, zkus to znovu.</div>'; }
+}
+
+async function pickResult(i){
+  const r = window._searchResults[i]; if (!r) return;
+  if (searchMode === 'watch'){
+    if (!state.watchlist.some(w => w.symbol === r.symbol)){
+      state.watchlist.push({id:uid(), symbol:r.symbol, name:r.name, target:null});
+      save();
+    }
+    closeModal(); refreshAll(); render();
+    return;
+  }
+  // Nová pozice – načti měnu a cenu, pak formulář prvního nákupu
+  openModal(`<h2>${esc(r.symbol)}</h2><div class="muted small">Načítám aktuální cenu…</div>`);
+  let cur = 'USD', price = '';
+  try{
+    const q = await fetchQuote(r.symbol);
+    cur = q.currency; price = q.price.toFixed(4);
+    quotes[r.symbol] = q;
+  }catch(e){}
+  const type = r.quoteType === 'ETF' ? 'ETF' : r.quoteType === 'CRYPTOCURRENCY' ? 'Krypto' : 'Akcie';
+  openModal(`
+    <h2>${esc(r.symbol)}</h2>
+    <div class="muted small" style="margin-bottom:14px">${esc(r.name)} · ${cur}</div>
+    <label class="f">Typ aktiva</label>
+    <select id="hType">
+      ${['Akcie','ETF','Krypto'].map(t => `<option ${t===type?'selected':''}>${t}</option>`).join('')}
+    </select>
+    <label class="f">Datum nákupu</label>
+    <input id="hDate" type="date" value="${new Date().toISOString().slice(0,10)}">
+    <label class="f">Množství (ks)</label>
+    <input id="hQty" type="text" inputmode="decimal" placeholder="např. 10">
+    <label class="f">Cena za kus (${cur})</label>
+    <input id="hPrice" type="text" inputmode="decimal" value="${price}">
+    <label class="f">Poplatek (${cur}, volitelné)</label>
+    <input id="hFee" type="text" inputmode="decimal" placeholder="0">
+    <button class="btn primary" onclick="saveNewHolding('${esc(r.symbol)}', '${esc(r.name).replace(/'/g, '&#39;')}', '${cur}')">Uložit nákup</button>
+  `);
+}
+
+function pnum(id){
+  const v = parseFloat((document.getElementById(id)?.value || '').replace(',', '.'));
+  return isFinite(v) ? v : null;
+}
+
+function saveNewHolding(symbol, name, currency){
+  const qty = pnum('hQty'), price = pnum('hPrice');
+  if (!qty || qty <= 0 || price == null || price < 0){ toast('Vyplň množství a cenu'); return; }
+  const tx = { id:uid(), kind:'buy',
+    date: new Date(document.getElementById('hDate').value || Date.now()).getTime(),
+    qty, price, fee: pnum('hFee') || 0 };
+  const existing = state.holdings.find(h => h.symbol === symbol);
+  if (existing) existing.txs.push(tx);
+  else state.holdings.push({ id:uid(), symbol, name, currency,
+    type: document.getElementById('hType').value, txs:[tx] });
+  save(); closeModal(); refreshAll(); render(); toast('Pozice uložena ✓');
+}
+
+function openTxModal(hid){
+  const h = state.holdings.find(x => x.id === hid); if (!h) return;
+  const q = quotes[h.symbol];
+  openModal(`
+    <h2>${esc(h.symbol)}</h2>
+    <div class="seg" id="txKind">
+      <button class="active" data-k="buy">Nákup</button>
+      <button data-k="sell">Prodej</button>
+    </div>
+    <label class="f">Datum</label>
+    <input id="tDate" type="date" value="${new Date().toISOString().slice(0,10)}">
+    <label class="f">Množství (ks) – aktuálně držíš ${fmtQty(holdingQty(h))}</label>
+    <input id="tQty" type="text" inputmode="decimal">
+    <label class="f">Cena za kus (${h.currency})</label>
+    <input id="tPrice" type="text" inputmode="decimal" value="${q ? q.price.toFixed(4) : ''}">
+    <label class="f">Poplatek (volitelné)</label>
+    <input id="tFee" type="text" inputmode="decimal" placeholder="0">
+    <button class="btn primary" onclick="saveTx('${hid}')">Uložit</button>
+  `);
+  document.getElementById('txKind').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    document.querySelectorAll('#txKind button').forEach(x => x.classList.toggle('active', x === b));
+  });
+}
+
+function saveTx(hid){
+  const h = state.holdings.find(x => x.id === hid); if (!h) return;
+  const qty = pnum('tQty'), price = pnum('tPrice');
+  if (!qty || qty <= 0 || price == null){ toast('Vyplň množství a cenu'); return; }
+  const kind = document.querySelector('#txKind button.active').dataset.k;
+  if (kind === 'sell' && qty > holdingQty(h) + 1e-9){ toast('Nemůžeš prodat víc, než držíš'); return; }
+  h.txs.push({ id:uid(), kind,
+    date: new Date(document.getElementById('tDate').value || Date.now()).getTime(),
+    qty, price, fee: pnum('tFee') || 0 });
+  save(); closeModal(); render(); toast('Transakce uložena ✓');
+}
+
+/* =========================================================
+   START + AUTO-REFRESH
+========================================================= */
+render();
+refreshAll().then(() => refreshDividends());
+setInterval(() => { if (!document.hidden) refreshAll(); }, 30000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshAll(); });
+</script>
+</body>
+</html>
