@@ -50,6 +50,19 @@ async function fetchJson(url, extraHeaders) {
   return res;
 }
 
+// In-memory cache odpovědí (přežije mezi vyvoláními, dokud běží instance funkce).
+// Šetří Yahoo a brání chybě "Too Many Requests".
+const CACHE = new Map();
+function cacheGet(key, maxAgeMs) {
+  const e = CACHE.get(key);
+  if (e && Date.now() - e.at < maxAgeMs) return e.body;
+  return null;
+}
+function cacheSet(key, body) {
+  CACHE.set(key, { body, at: Date.now() });
+  if (CACHE.size > 200) CACHE.delete(CACHE.keys().next().value);
+}
+
 exports.handler = async (event) => {
   const p = event.queryStringParameters || {};
 
@@ -58,7 +71,7 @@ exports.handler = async (event) => {
     headers: {
       "Content-Type": "application/json",
       "Access-Control-Allow-Origin": "*",
-      "Cache-Control": "public, max-age=10",
+      "Cache-Control": "public, max-age=20",
     },
     body,
   });
@@ -70,14 +83,29 @@ exports.handler = async (event) => {
       const events = p.events ? `&events=${encodeURIComponent(p.events)}` : "";
       const pre = p.prepost === "1" ? "&includePrePost=true" : "";
       const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(p.symbol)}?range=${range}&interval=${interval}${events}${pre}`;
+      const ckey = "chart:" + url;
+      // Krátká cache na živé kotace (1d), delší na historii
+      const maxAge = (p.range || "1d") === "1d" ? 20000 : 6 * 60 * 60 * 1000;
+      const cached = cacheGet(ckey, maxAge);
+      if (cached) return respond(200, cached);
       const res = await fetchJson(url);
-      return respond(res.status, await res.text());
+      const body = await res.text();
+      if (res.ok && body.startsWith("{")) { cacheSet(ckey, body); return respond(200, body); }
+      // Při blokaci (429) nebo chybě vrať poslední známou hodnotu, i starší
+      const stale = cacheGet(ckey, Infinity);
+      if (stale) return respond(200, stale);
+      return respond(res.status, body);
     }
 
     if (p.endpoint === "search" && p.q) {
       const url = `https://query1.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(p.q)}&quotesCount=12&newsCount=0`;
+      const ckey = "search:" + p.q.toLowerCase();
+      const cached = cacheGet(ckey, 60 * 60 * 1000);
+      if (cached) return respond(200, cached);
       const res = await fetchJson(url);
-      return respond(res.status, await res.text());
+      const body = await res.text();
+      if (res.ok && body.startsWith("{")) cacheSet(ckey, body);
+      return respond(res.status, body);
     }
 
     if (p.endpoint === "quoteSummary" && p.symbol) {
@@ -85,7 +113,11 @@ exports.handler = async (event) => {
         p.modules ||
         "price,summaryDetail,defaultKeyStatistics,financialData,calendarEvents,earningsHistory,recommendationTrend";
 
-      // Pokus 1: starý v10 host s cookie+crumb
+      const ckey = "summary:" + p.symbol + ":" + modules;
+      // Fundamenty se mění zřídka – cache 6 hodin výrazně šetří volání
+      const cached = cacheGet(ckey, 6 * 60 * 60 * 1000);
+      if (cached) return respond(200, cached);
+
       const cred = await getCredentials();
       const crumbQ = cred.crumb ? `&crumb=${encodeURIComponent(cred.crumb)}` : "";
       const headers = cred.cookie ? { "Cookie": cred.cookie } : {};
@@ -95,15 +127,18 @@ exports.handler = async (event) => {
         let res = await fetchJson(url, headers);
         if (res.ok) {
           const txt = await res.text();
-          // Ověř, že to není chybová obálka
-          if (!txt.includes('"quoteSummary":{"result":null')) return respond(200, txt);
+          if (txt.startsWith("{") && !txt.includes('"result":null')) {
+            cacheSet(ckey, txt);
+            return respond(200, txt);
+          }
         }
       }
 
-      // Pokus 2 (záloha): nový endpoint quoteSummary přes k-v API bez crumb
       const alt = `https://query1.finance.yahoo.com/v6/finance/quoteSummary/${encodeURIComponent(p.symbol)}?modules=${encodeURIComponent(modules)}`;
       const resAlt = await fetchJson(alt, headers);
-      return respond(resAlt.status, await resAlt.text());
+      const bodyAlt = await resAlt.text();
+      if (resAlt.ok && bodyAlt.startsWith("{")) cacheSet(ckey, bodyAlt);
+      return respond(resAlt.status, bodyAlt);
     }
 
     return respond(400, JSON.stringify({ error: "Neplatný požadavek" }));
