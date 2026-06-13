@@ -897,7 +897,11 @@ function renderPortfolio(){
   document.getElementById('headerTitle').textContent = 'Portfolio';
   const code = state.settings.currency;
   const groups = ['Akcie','ETF','Krypto']
-    .map(type => ({type, items: activeHoldings().filter(h => h.type === type)}))
+    .map(type => ({
+      type,
+      items: activeHoldings().filter(h => h.type === type)
+        .sort((a,b) => hValue(b) - hValue(a))   // seřaď podle hodnoty pozice sestupně
+    }))
     .filter(g => g.items.length);
 
   view.innerHTML = `
@@ -913,12 +917,15 @@ function renderPortfolio(){
           const value = hValue(h), cost = hCost(h);
           const plPct = cost ? (value-cost)/cost*100 : 0;
           const dayPct = q ? qChangePct(q) : 0;
+          // u ETF (a obecně když název není jen ticker) ukaž název pod symbolem
+          const showName = h.name && h.name.toUpperCase() !== h.symbol.toUpperCase();
           return `
           <div class="row" onclick="openDetail('${h.id}')">
             <div class="rowlogo">
               ${logoHTML(h)}
               <div class="l">
                 <div class="sym">${esc(h.symbol)}</div>
+                ${showName ? `<div class="name">${esc(h.name)}</div>` : ''}
                 <div class="name num">${fmtQty(holdingQty(h))} ks · nyní ${q ? fmtMoney(q.price, q.currency) : '…'}</div>
               </div>
             </div>
@@ -1567,8 +1574,14 @@ function renderSettings(){
       <h3>Zdroje dat</h3>
       <div class="row" style="cursor:default"><span class="muted small">Ceny a grafy</span><span class="small">Yahoo Finance</span></div>
       <div class="row" style="cursor:default"><span class="muted small">Zprávy a výsledky</span><span class="small">Finnhub</span></div>
-      <div class="row" style="cursor:default"><span class="muted small">Obnova cen</span><span class="small">každých 30 s</span></div>
+      <div class="row" style="cursor:default"><span class="muted small">Obnova cen</span><span class="small">každé 3 min</span></div>
       <div class="row" style="cursor:default"><span class="muted small">Uložení dat</span><span class="small">lokálně v zařízení</span></div>
+    </div>
+
+    <div class="card">
+      <h3>Údržba portfolia</h3>
+      <button class="btn ghost" onclick="fixTypesAndNames()" style="margin-bottom:8px">Opravit typy a názvy (ETF, krypto)</button>
+      <div class="tiny muted">Projde tvé pozice a podle známých ETF (CSPX → S&P 500, CNDX → Nasdaq 100…) opraví zařazení a doplní lidské názvy. Použij po importu, když ti vše spadlo do „Akcie".</div>
     </div>
 
     <div class="card">
@@ -1602,6 +1615,38 @@ async function toggleLock(el){
     setLockConfig({enabled:false});
     toast('Zámek vypnut');
   }
+}
+
+async function fixTypesAndNames(){
+  let changed = 0;
+  for (const h of state.holdings){
+    const root = etfRoot(h.symbol);
+    // ETF podle tabulky
+    if (KNOWN_ETF[root]){
+      if (h.type !== 'ETF'){ h.type = 'ETF'; changed++; }
+      if (h.name !== KNOWN_ETF[root]){ h.name = KNOWN_ETF[root]; changed++; }
+      continue;
+    }
+    // krypto podle symbolu
+    if (h.symbol.includes('-USD') || /^(BTC|ETH|SOL|ADA|XRP|DOGE|DOT|LTC|BNB|AVAX|MATIC)$/.test(root)){
+      if (h.type !== 'Krypto'){ h.type = 'Krypto'; changed++; }
+      continue;
+    }
+    // ostatní: zkus doplnit hezký název z Yahoo, když je name jen ticker
+    if ((!h.name || h.name.toUpperCase() === h.symbol.toUpperCase())){
+      try{
+        const sr = await fetchSearch(h.symbol);
+        const hit = sr.find(x => x.symbol === h.symbol) || sr[0];
+        if (hit){
+          if (hit.name){ h.name = hit.name; changed++; }
+          if (hit.quoteType === 'ETF' && h.type !== 'ETF'){ h.type = 'ETF'; changed++; }
+          else if (hit.quoteType === 'CRYPTOCURRENCY' && h.type !== 'Krypto'){ h.type = 'Krypto'; changed++; }
+        }
+      }catch(e){}
+    }
+  }
+  save(); render();
+  toast(changed ? `Opraveno ${changed} údajů ✓` : 'Vše už je v pořádku');
 }
 
 function exportData(){
@@ -1878,6 +1923,7 @@ function tryParseXTB(sheets){
   const cTicker = head.indexOf('ticker');
   const cTime = head.indexOf('time');
   const cComment = head.indexOf('comment');
+  const cInstr = head.indexOf('instrument');
 
   // Z komentáře "OPEN BUY 0.0751 @ 1708.00" / "CLOSE BUY 16/16.5 @ 683.89"
   const parseComment = (comment) => {
@@ -1904,7 +1950,8 @@ function tryParseXTB(sheets){
     const date = parseAnyDate(r[cTime]);
     if (!date || !parsed.qty || parsed.price == null) continue;
     out.push({ symbol: ticker, kind: parsed.kind, date, qty: parsed.qty,
-      price: parsed.price, fee: 0, cur: 'USD' });
+      price: parsed.price, fee: 0, cur: 'USD',
+      name: cInstr >= 0 ? String(r[cInstr] || '').trim() : null });
   }
   return out.length ? out : null;
 }
@@ -2129,6 +2176,30 @@ function yahooGuess(s){
   return s;
 }
 
+// Známá ETF: kořen tickeru → hezký název. Pomáhá poznat typ a pojmenovat i bez Yahoo.
+const KNOWN_ETF = {
+  CSPX:'iShares Core S&P 500', SXR8:'iShares Core S&P 500', VUSA:'Vanguard S&P 500',
+  VUAA:'Vanguard S&P 500 (Acc)', CNDX:'iShares Nasdaq 100', SXRV:'iShares Nasdaq 100',
+  EQQQ:'Invesco Nasdaq 100', VWRA:'Vanguard FTSE All-World (Acc)', VWCE:'Vanguard FTSE All-World',
+  VWRL:'Vanguard FTSE All-World', IWDA:'iShares Core MSCI World', SWDA:'iShares Core MSCI World',
+  EUNL:'iShares Core MSCI World', VHVE:'Vanguard FTSE Dev. World', ZPRV:'SPDR MSCI USA Small Cap',
+  ZPRX:'SPDR MSCI Europe Small Cap', ICHN:'iShares MSCI China', FXC:'iShares China Large Cap',
+  IEMA:'iShares Core MSCI EM', EIMI:'iShares Core MSCI EM IMI', VFEA:'Vanguard FTSE EM',
+  AGGH:'iShares Core Global Aggregate Bond', VWCG:'Vanguard Global Bond', SGLN:'iShares Physical Gold',
+  IGLN:'iShares Physical Gold', VAGS:'Vanguard Global Aggregate Bond'
+};
+function etfRoot(symbol){ return String(symbol||'').toUpperCase().split('.')[0]; }
+
+// Vrátí {type, name} pro symbol – nejdřív lokální znalost (ETF/krypto), pak fallback
+function assetInfo(symbol, fallbackName){
+  const root = etfRoot(symbol);
+  if (KNOWN_ETF[root]) return { type:'ETF', name: KNOWN_ETF[root] };
+  if (String(symbol).includes('-USD') || /^(BTC|ETH|SOL|ADA|XRP|DOGE|DOT|LTC|BNB|AVAX|MATIC)$/.test(root))
+    return { type:'Krypto', name: fallbackName || root };
+  return { type:'Akcie', name: fallbackName || symbol };
+}
+
+
 function isDupTx(ysym, tx){
   const h = state.holdings.find(x => x.symbol === ysym);
   if (!h) return false;
@@ -2146,7 +2217,7 @@ function impParseRows(){
     return imp.brokerTxs.map(t => {
       const ysym = yahooGuess(t.symbol);
       const tx = {symbol:t.symbol, cur:t.cur, kind:t.kind, date:t.date,
-        qty:t.qty, price:t.price, fee:t.fee||0, id:'r'+(id++)};
+        qty:t.qty, price:t.price, fee:t.fee||0, id:'r'+(id++), srcName:t.name||null};
       tx.dup = isDupTx(ysym, tx);
       tx.activeSymbol = (net[ysym] || 0) > 1e-6;  // patří k aktuálně držené pozici?
       return tx;
@@ -2304,16 +2375,22 @@ async function impDoImport(){
     if (!ysym) continue;
     let h = state.holdings.find(x => x.symbol === ysym);
     if (!h){
-      let cur = t.cur || 'USD', name = ysym, type = 'Akcie';
+      // Nejdřív lokální znalost (funguje i bez Yahoo): ETF tabulka, krypto, název z výpisu
+      const info = assetInfo(ysym, t.srcName);
+      let cur = t.cur || 'USD', name = info.name, type = info.type;
+      // Yahoo jako doplněk – upřesní měnu a případně název/typ, když je dostupné
       try{ const q = await fetchQuote(ysym); cur = q.currency; quotes[ysym] = q; }catch(e){}
-      try{
-        const sr = await fetchSearch(ysym);
-        const hit = sr.find(x => x.symbol === ysym) || sr[0];
-        if (hit){
-          name = hit.name;
-          type = hit.quoteType === 'ETF' ? 'ETF' : hit.quoteType === 'CRYPTOCURRENCY' ? 'Krypto' : 'Akcie';
-        }
-      }catch(e){}
+      if (type === 'Akcie' && !KNOWN_ETF[etfRoot(ysym)]){
+        try{
+          const sr = await fetchSearch(ysym);
+          const hit = sr.find(x => x.symbol === ysym) || sr[0];
+          if (hit){
+            if (hit.quoteType === 'ETF') type = 'ETF';
+            else if (hit.quoteType === 'CRYPTOCURRENCY') type = 'Krypto';
+            if (!t.srcName && hit.name) name = hit.name;
+          }
+        }catch(e){}
+      }
       h = {id: uid(), symbol: ysym, name, currency: cur, type, txs: []};
       state.holdings.push(h);
     }
