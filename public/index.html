@@ -236,20 +236,37 @@ async function yahoo(params){
   return res.json();
 }
 
+// Poslední zachycené pre/post ceny (drží se i přes víkend)
+const LAST_PREPOST_KEY = 'mojeportfolio-prepost';
+let lastPrepost = (() => {
+  try{ return JSON.parse(localStorage.getItem(LAST_PREPOST_KEY)) || {}; }catch(e){ return {}; }
+})();
+function savePrepost(){
+  try{ localStorage.setItem(LAST_PREPOST_KEY, JSON.stringify(lastPrepost)); }catch(e){}
+}
+
 async function fetchQuote(symbol){
   const j = await yahoo({endpoint:'chart', symbol, range:'1d', interval:'5m', prepost:'1'});
   const m = j?.chart?.result?.[0]?.meta;
   if (!m || m.regularMarketPrice == null) throw new Error('no quote');
-  return {
+  const q = {
     symbol,
     price: m.regularMarketPrice,
     prev: m.chartPreviousClose ?? m.previousClose ?? m.regularMarketPrice,
     currency: m.currency || 'USD',
-    // Pre-market / po-burzovní (jen u US akcií, jinak undefined)
     pre:  m.preMarketPrice  ?? null,
     post: m.postMarketPrice ?? null,
     state: m.marketState || null   // PRE, REGULAR, POST, CLOSED
   };
+  // Zachyť poslední platnou pre/post cenu, ať ji můžeme ukázat i o víkendu
+  if (q.pre != null && q.state === 'PRE'){
+    lastPrepost[symbol] = {kind:'pre', price:q.pre, ref:q.price, currency:q.currency, at:Date.now()};
+    savePrepost();
+  } else if (q.post != null && (q.state === 'POST' || q.state === 'POSTPOST' || q.state === 'CLOSED')){
+    lastPrepost[symbol] = {kind:'post', price:q.post, ref:q.price, currency:q.currency, at:Date.now()};
+    savePrepost();
+  }
+  return q;
 }
 
 // Detailní fundamenty (P/E, 52t rozpětí, doporučení, earnings termín)
@@ -434,23 +451,78 @@ function trailingDividends(){
   return sum;
 }
 
-// Logo firmy – přes veřejnou službu logo.dev podle domény / tickeru.
-// Když logo neexistuje, onerror v <img> ho schová a zůstane barevný monogram.
-function logoURL(h){
-  const base = (h.symbol || '').split('.')[0].split('-')[0].toLowerCase();
-  return `https://img.logo.dev/ticker/${encodeURIComponent(base)}?token=pk_demo&size=80&format=png&retina=true`;
+// Loga firem – oficiální loga přes veřejné služby podle domény firmy.
+// Bez API klíče. Když logo neexistuje, <img> onerror ho schová a zůstane
+// barevný monogram jako záloha.
+
+// Mapování ticker → webová doména pro nejběžnější tituly.
+// (Klíč je část symbolu před tečkou/pomlčkou, velkými písmeny.)
+const LOGO_DOMAINS = {
+  AAPL:'apple.com', MSFT:'microsoft.com', GOOGL:'google.com', GOOG:'google.com',
+  AMZN:'amazon.com', NVDA:'nvidia.com', META:'meta.com', TSLA:'tesla.com',
+  NFLX:'netflix.com', AMD:'amd.com', INTC:'intel.com', IBM:'ibm.com',
+  ORCL:'oracle.com', CRM:'salesforce.com', ADBE:'adobe.com', PYPL:'paypal.com',
+  DIS:'disney.com', KO:'coca-cola.com', PEP:'pepsico.com', MCD:'mcdonalds.com',
+  SBUX:'starbucks.com', NKE:'nike.com', V:'visa.com', MA:'mastercard.com',
+  JPM:'jpmorganchase.com', BAC:'bankofamerica.com', GS:'goldmansachs.com',
+  WMT:'walmart.com', COST:'costco.com', PG:'pg.com', JNJ:'jnj.com',
+  PFE:'pfizer.com', MRNA:'modernatx.com', XOM:'exxonmobil.com', CVX:'chevron.com',
+  BA:'boeing.com', GE:'ge.com', F:'ford.com', GM:'gm.com', UBER:'uber.com',
+  ABNB:'airbnb.com', SHOP:'shopify.com', SQ:'block.xyz', PLTR:'palantir.com',
+  SNOW:'snowflake.com', COIN:'coinbase.com', T:'att.com', VZ:'verizon.com',
+  CSCO:'cisco.com', QCOM:'qualcomm.com', TXN:'ti.com', AVGO:'broadcom.com',
+  // ETF (loga správců)
+  VWCE:'vanguard.com', VUAA:'vanguard.com', VUSA:'vanguard.com', VWRL:'vanguard.com',
+  CSPX:'ishares.com', IWDA:'ishares.com', EUNL:'ishares.com', SXR8:'ishares.com',
+  // Krypto
+  BTC:'bitcoin.org', ETH:'ethereum.org', SOL:'solana.com', ADA:'cardano.org',
+  XRP:'ripple.com', DOGE:'dogecoin.com', DOT:'polkadot.network', LTC:'litecoin.org'
+};
+
+function logoBase(h){ return (h.symbol || '').split('.')[0].split('-')[0].toUpperCase(); }
+
+// Vrátí seřazený seznam URL ke zkoušení (postupně přes onerror)
+function logoCandidates(h){
+  const base = logoBase(h);
+  const domain = LOGO_DOMAINS[base];
+  const list = [];
+  if (domain){
+    // Pořadí podle spolehlivosti: DuckDuckGo a Google jsou roky stabilní a bez klíče.
+    list.push(`https://icons.duckduckgo.com/ip3/${domain}.ico`);
+    list.push(`https://www.google.com/s2/favicons?domain=${domain}&sz=64`);
+  }
+  return list;
 }
+
 function monogram(h){
   const c = (h.symbol || '?')[0].toUpperCase();
   const colors = ['#5b8cff','#3ddc97','#f5b941','#c77dff','#ff8fab','#4cc9f0'];
   const idx = (h.symbol || '').split('').reduce((s,ch) => s + ch.charCodeAt(0), 0) % colors.length;
   return `<span class="mono" style="background:${colors[idx]}">${c}</span>`;
 }
+
 function logoHTML(h){
+  const cands = logoCandidates(h);
+  const mono = monogram(h);
+  if (!cands.length) return `<span class="logowrap">${mono.replace('display:none', 'display:flex')}</span>`;
+  // data-fallbacks: zbývající URL, které onerror postupně zkusí, než spadne na monogram
+  const rest = cands.slice(1).join('|');
   return `<span class="logowrap">
-    <img src="${logoURL(h)}" alt="" loading="lazy"
-      onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-    ${monogram(h)}</span>`;
+    <img src="${cands[0]}" alt="" loading="lazy" data-fallbacks="${esc(rest)}"
+      onerror="logoFallback(this)">
+    ${mono}</span>`;
+}
+
+// Postupné zkoušení dalších zdrojů loga; po vyčerpání zobrazí monogram
+function logoFallback(img){
+  const list = (img.dataset.fallbacks || '').split('|').filter(Boolean);
+  if (list.length){
+    img.dataset.fallbacks = list.slice(1).join('|');
+    img.src = list[0];
+  } else {
+    img.style.display = 'none';
+    if (img.nextElementSibling) img.nextElementSibling.style.display = 'flex';
+  }
 }
 
 /* Rekonstrukce historické hodnoty portfolia z transakcí + historických cen.
@@ -614,9 +686,12 @@ function renderDash(){
   const code = state.settings.currency;
   const hs = activeHoldings();
 
-  const movers = hs.filter(h => quotes[h.symbol])
-    .sort((a,b) => Math.abs(qChangePct(quotes[b.symbol])) - Math.abs(qChangePct(quotes[a.symbol])))
-    .slice(0,4);
+  // Pohyby dne rozdělené na zisky a ztráty
+  const withQuote = hs.filter(h => quotes[h.symbol]);
+  const gainers = withQuote.filter(h => qChangePct(quotes[h.symbol]) > 0)
+    .sort((a,b) => qChangePct(quotes[b.symbol]) - qChangePct(quotes[a.symbol])).slice(0,3);
+  const losers = withQuote.filter(h => qChangePct(quotes[h.symbol]) < 0)
+    .sort((a,b) => qChangePct(quotes[a.symbol]) - qChangePct(quotes[b.symbol])).slice(0,3);
 
   // Rozpad na jednotlivé tituly (ne jen podle typu)
   const bySymbol = hs.map(h => ({h, value: hValue(h)}))
@@ -676,10 +751,15 @@ function renderDash(){
       </div>
     </div>` : ''}
 
-    ${movers.length ? `
+    ${withQuote.length ? `
     <div class="card">
       <h3>Největší pohyby dne</h3>
-      ${movers.map(h => rowHolding(h)).join('')}
+      <div class="label" style="margin-bottom:4px">📈 Top zisky</div>
+      ${gainers.length ? gainers.map(h => rowHolding(h)).join('')
+        : '<div class="muted small" style="padding:6px 0">Dnes žádná pozice neroste.</div>'}
+      <div class="label" style="margin:14px 0 4px">📉 Top ztráty</div>
+      ${losers.length ? losers.map(h => rowHolding(h)).join('')
+        : '<div class="muted small" style="padding:6px 0">Dnes jsou všechny pozice bez ztrát. 🎉</div>'}
     </div>` : ''}
 
     <div class="card" onclick="openDividends()" style="cursor:pointer">
@@ -862,15 +942,20 @@ async function renderDetail(){
   const plPct = cost ? pl/cost*100 : 0;
   const real = toDisplay(realizedPL(h), h.currency);
 
-  // Pre/post market řádek
+  // Pre/post market řádek:
+  // - když zrovna probíhá pre/post fáze, ukáž aktuální
+  // - když burza nejede (víkend/noc/regular), ukaž poslední zachycenou pre/post cenu
   let prepost = '';
-  if (q && q.pre != null && q.state === 'PRE'){
-    const d = q.prev ? (q.pre - q.price) : 0;
-    prepost = `<div class="prepost">Předburzovně: <b>${fmtMoney(q.pre, q.currency)}</b>
-      <span class="${cls(q.pre - q.price)}">(${fmtPct((q.pre/q.price-1)*100)})</span></div>`;
-  } else if (q && q.post != null && q.state === 'POST'){
-    prepost = `<div class="prepost">Po zavření: <b>${fmtMoney(q.post, q.currency)}</b>
-      <span class="${cls(q.post - q.price)}">(${fmtPct((q.post/q.price-1)*100)})</span></div>`;
+  const live = q && q.state === 'PRE' && q.pre != null ? {kind:'pre', price:q.pre, ref:q.price, currency:q.currency}
+    : q && (q.state === 'POST' || q.state === 'POSTPOST') && q.post != null ? {kind:'post', price:q.post, ref:q.price, currency:q.currency}
+    : null;
+  const pp = live || lastPrepost[h.symbol];
+  if (pp && pp.ref){
+    const label = pp.kind === 'pre' ? 'Předburzovně' : 'Po zavření';
+    const stale = !live && pp.at && (Date.now() - pp.at > 30*60*1000);
+    const note = stale ? ` <span class="muted">· z posledního obchodování</span>` : '';
+    prepost = `<div class="prepost">${label}: <b>${fmtMoney(pp.price, pp.currency)}</b>
+      <span class="${cls(pp.price - pp.ref)}">(${fmtPct((pp.price/pp.ref-1)*100)})</span>${note}</div>`;
   }
 
   view.innerHTML = `
