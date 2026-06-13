@@ -577,6 +577,17 @@ async function buildPortfolioHistory(rangeKey){
 /* =========================================================
    REFRESH DAT + ALERTY
 ========================================================= */
+// Pomocná: stáhne kotace po malých dávkách s odstupem, aby Yahoo neblokoval
+async function fetchQuotesBatched(symbols, batchSize, gapMs){
+  for (let i = 0; i < symbols.length; i += batchSize){
+    const batch = symbols.slice(i, i + batchSize);
+    await Promise.allSettled(batch.map(async s => {
+      try{ quotes[s] = await fetchQuote(s); }catch(e){ /* ponech starou cenu */ }
+    }));
+    if (i + batchSize < symbols.length) await new Promise(r => setTimeout(r, gapMs));
+  }
+}
+
 async function refreshAll(){
   if (refreshing) return;
   refreshing = true;
@@ -587,16 +598,21 @@ async function refreshAll(){
     ...state.watchlist.map(w => w.symbol)
   ])];
 
-  await Promise.allSettled(symbols.map(async s => { quotes[s] = await fetchQuote(s); }));
-
-  // Směnné kurzy do zobrazovací měny
+  // Směnné kurzy potřebné pro přepočet (přidáme k symbolům)
   const target = state.settings.currency;
-  const curs = new Set(state.holdings.map(h => h.currency));
-  Object.values(quotes).forEach(q => curs.add(q.currency));
-  await Promise.allSettled([...curs].filter(c => c !== target).map(async c => {
-    const q = await fetchQuote(`${c}${target}=X`);
-    fx[c + target] = q.price;
-  }));
+  const knownCurs = new Set(state.holdings.map(h => h.currency));
+  Object.values(quotes).forEach(q => q && knownCurs.add(q.currency));
+  const fxSymbols = [...knownCurs].filter(c => c !== target).map(c => `${c}${target}=X`);
+
+  // Vše stáhneme po dávkách 3 symbolů s odstupem 600 ms – šetrné k Yahoo
+  await fetchQuotesBatched([...symbols, ...fxSymbols], 3, 600);
+
+  // Zapiš získané FX kurzy
+  for (const c of knownCurs){
+    if (c === target) continue;
+    const q = quotes[`${c}${target}=X`];
+    if (q) fx[c + target] = q.price;
+  }
 
   lastRefresh = new Date();
   refreshing = false;
@@ -1788,20 +1804,23 @@ function impLoadFile(input){
   const reader = new FileReader();
   reader.onload = () => {
     try{
-      let rows;
+      let rows, sheets = null;
       if (isXlsx){
         const wb = XLSX.read(new Uint8Array(reader.result), {type:'array'});
+        sheets = {};
         let best = [];
         for (const name of wb.SheetNames){
-          const r = XLSX.utils.sheet_to_json(wb.Sheets[name], {header:1, raw:false, defval:''});
+          const r = XLSX.utils.sheet_to_json(wb.Sheets[name], {header:1, raw:false, defval:''})
+            .map(row => (row || []).map(c => String(c ?? '')));
+          sheets[name] = r;
           if (r.length > best.length) best = r;
         }
-        rows = best.map(r => (r || []).map(c => String(c ?? '')));
+        rows = best;
       } else {
         rows = parseCSV(reader.result);
       }
       if (!rows.length) throw new Error('prázdný soubor');
-      impPrepare(rows);
+      impPrepare(rows, sheets);
     }catch(e){
       body.innerHTML = '<div class="small down">Soubor se nepodařilo přečíst: ' + esc(e.message || e) + '</div>';
     }
@@ -1838,8 +1857,185 @@ function parseCSV(text){
   return rows;
 }
 
-function impPrepare(allRows){
-  // Najdi řádek s hlavičkami (XTB má před tabulkou často pár informačních řádků)
+// Rozpozná XTB export (XLSX se listy "Cash Operations" / "Closed Positions").
+// Vrací hotové transakce, nebo null když to není XTB.
+function tryParseXTB(sheets){
+  if (!sheets) return null;
+  // Najdi list Cash Operations (case-insensitive)
+  const cashName = Object.keys(sheets).find(n => n.toLowerCase().includes('cash operation'));
+  if (!cashName) return null;
+  const rows = sheets[cashName];
+
+  // Najdi hlavičku s "Type, Ticker, ... Comment"
+  let hi = -1;
+  for (let i = 0; i < Math.min(rows.length, 15); i++){
+    const j = rows[i].join('|').toLowerCase();
+    if (j.includes('type') && j.includes('ticker') && j.includes('comment')){ hi = i; break; }
+  }
+  if (hi < 0) return null;
+  const head = rows[hi].map(h => h.toLowerCase().trim());
+  const cType = head.indexOf('type');
+  const cTicker = head.indexOf('ticker');
+  const cTime = head.indexOf('time');
+  const cComment = head.indexOf('comment');
+
+  // Z komentáře "OPEN BUY 0.0751 @ 1708.00" / "CLOSE BUY 16/16.5 @ 683.89"
+  const parseComment = (comment) => {
+    if (!comment) return null;
+    const s = String(comment);
+    let kind = null;
+    if (/OPEN\s+BUY/i.test(s)) kind = 'buy';
+    else if (/CLOSE\s+BUY/i.test(s)) kind = 'sell';
+    else return null;
+    const m = s.match(/BUY\s+([\d.]+)(?:\/[\d.]+)?\s*@\s*([\d.]+)/i);
+    if (!m) return null;
+    return { kind, qty: parseFloat(m[1]), price: parseFloat(m[2]) };
+  };
+
+  const out = [];
+  for (let i = hi + 1; i < rows.length; i++){
+    const r = rows[i];
+    const type = String(r[cType] || '').toLowerCase();
+    if (!type.includes('stock')) continue;   // jen nákupy/prodeje akcií
+    const ticker = String(r[cTicker] || '').trim();
+    if (!ticker) continue;
+    const parsed = parseComment(r[cComment]);
+    if (!parsed) continue;
+    const date = parseAnyDate(r[cTime]);
+    if (!date || !parsed.qty || parsed.price == null) continue;
+    out.push({ symbol: ticker, kind: parsed.kind, date, qty: parsed.qty,
+      price: parsed.price, fee: 0, cur: 'USD' });
+  }
+  return out.length ? out : null;
+}
+
+// Rozpozná Revolut „konsolidovaný výpis" – dlouhý dokument s více tabulkami.
+// Vrací rovnou hotové transakce, nebo null když to není tenhle formát.
+function tryParseRevolutConsolidated(rows){
+  // Najdi řádek, kde je text typický pro Revolut konsolidovaný výpis
+  const flat = rows.slice(0, 5).map(r => r.join(' ').toLowerCase()).join(' ');
+  const looksRevolut = rows.some(r => {
+    const j = r.join('|').toLowerCase();
+    return j.includes('popis a symbol') || j.includes('běžné účty souhrny') || j.includes('hodnota vkladu');
+  });
+  if (!looksRevolut) return null;
+
+  // Z buňky "US$10,785.96 (225,757.15 CZK)" vytáhni částku v první (původní) měně a její kód
+  const parseMoneyCell = (cell) => {
+    if (!cell) return {amount:null, cur:null};
+    const s = String(cell);
+    // měna podle symbolu/kódu
+    let cur = null;
+    if (/US\$|USD/i.test(s)) cur = 'USD';
+    else if (/€|EUR/i.test(s)) cur = 'EUR';
+    else if (/£|GBP/i.test(s)) cur = 'GBP';
+    else if (/CZK|Kč/i.test(s)) cur = 'CZK';
+    // první číslo (před případnou závorkou) – formát US$10,785.96
+    const m = s.match(/[\d][\d,.\s]*\d|\d/);
+    if (!m) return {amount:null, cur};
+    let n = m[0].replace(/\s/g,'');
+    // americký formát s čárkou jako oddělovačem tisíců a tečkou desetinnou
+    if (n.includes(',') && n.includes('.')) n = n.replace(/,/g,'');
+    else if (n.includes(',') && !n.includes('.')) n = n.replace(/,/g,'.'); // evropský
+    const v = parseFloat(n);
+    return {amount: isFinite(v) ? v : null, cur};
+  };
+
+  const out = [];
+  let i = 0;
+  // Řádek ukončuje tabulku, když je to oddělovač, prázdný, nový nadpis sekce,
+  // nebo souhrnový řádek "Celkem".
+  const isTableEnd = (r, symIdx) => {
+    const first = (r[0]||'').trim();
+    const sym = (r[symIdx]||'').trim();
+    if (first === '' || first.startsWith('---')) return true;
+    if (sym.toLowerCase() === 'celkem' || first.toLowerCase() === 'celkem') return true;
+    // nový nadpis sekce: první buňka má text, ale ostatní (symbol/hodnota) jsou prázdné
+    const filled = r.filter(c => String(c).trim() !== '').length;
+    if (filled <= 1) return true;
+    return false;
+  };
+
+  while (i < rows.length){
+    const cells = rows[i].map(c => String(c).trim());
+    const joined = cells.join('|').toLowerCase();
+
+    // --- Tabulka NÁKUPŮ akcií: "Datum, Popis a symbol, ISIN, Množství, Země, Hrubá hodnota, ..." ---
+    if (cells[0] && cells[0].toLowerCase() === 'datum'
+        && joined.includes('popis a symbol') && joined.includes('množství') && joined.includes('hrubá hodnota')){
+      const cDate=0, cSym=1, cQty=3;
+      const cVal = cells.findIndex(c => c.toLowerCase().includes('hrubá hodnota'));
+      const cFee = cells.findIndex(c => c.toLowerCase() === 'poplatky');
+      i++;
+      while (i < rows.length){
+        const r = rows[i].map(c => String(c).trim());
+        if (isTableEnd(r, cSym)) break;
+        if (/^[A-Z.]+$/.test(r[cSym])){
+          const qty = num(r[cQty]);
+          const val = parseMoneyCell(r[cVal]);
+          const fee = parseMoneyCell(r[cFee]);
+          const date = parseAnyDate(r[cDate]);
+          if (qty && val.amount != null && date){
+            out.push({symbol:r[cSym], kind:'buy', date, qty,
+              price: val.amount/qty, fee: fee.amount||0, cur: val.cur||'USD'});
+          }
+        }
+        i++;
+      }
+      continue;
+    }
+
+    // --- Tabulka PRODEJŮ akcií: "Datum (prodeje, nákupu), Popis, symbol a ISIN, ..., Units sold, ..." ---
+    if (joined.includes('prodeje, nákupu') && (joined.includes('units sold') || joined.includes('prodané kusy'))
+        && joined.includes(' isin')){
+      const cSym = cells.findIndex(c => c.toLowerCase().includes('symbol'));
+      const cQty = cells.findIndex(c => c.toLowerCase().includes('units sold') || c.toLowerCase().includes('prodané'));
+      const cVal = cells.findIndex(c => c.toLowerCase().includes('hodnota'));
+      const cFee = cells.findIndex(c => c.toLowerCase() === 'poplatky');
+      i++;
+      while (i < rows.length){
+        const r = rows[i].map(c => String(c).trim());
+        if (isTableEnd(r, cSym)) break;
+        // symbol je v "Apple AAPL (US0378...)" – vezmi část před závorkou a z ní poslední zkratku
+        const beforeParen = (r[cSym]||'').split('(')[0];
+        const matches = beforeParen.match(/\b[A-Z][A-Z0-9.]{0,5}\b/g);
+        const sym = matches ? matches[matches.length-1] : null;
+        const qty = num(r[cQty]);
+        const val = parseMoneyCell(r[cVal]);
+        const date = parseAnyDate(r[0]);   // datum prodeje je první z dvojice
+        if (sym && qty && val.amount != null && date){
+          out.push({symbol:sym, kind:'sell', date, qty,
+            price: val.amount/qty, fee:(parseMoneyCell(r[cFee]).amount)||0, cur: val.cur||'USD'});
+        }
+        i++;
+      }
+      continue;
+    }
+
+    i++;
+  }
+
+  return out.length ? out : null;
+}
+
+function impPrepare(allRows, sheets){
+  // Zkus XTB (XLSX s listem Cash Operations)
+  const xtb = tryParseXTB(sheets);
+  if (xtb){
+    imp = { brokerTxs: xtb, broker: 'XTB', headers: [], rows: [], map: {} };
+    impRender();
+    return;
+  }
+
+  // Zkus Revolut konsolidovaný formát
+  const rev = tryParseRevolutConsolidated(allRows);
+  if (rev){
+    imp = { brokerTxs: rev, broker: 'Revolut', headers: [], rows: [], map: {} };
+    impRender();
+    return;
+  }
+
+  // Jinak: najdi řádek s hlavičkami (běžné tabulkové exporty)
   const allKeys = Object.values(HKEYS).flat();
   let best = {score: 0, idx: 0};
   for (let i = 0; i < Math.min(allRows.length, 30); i++){
@@ -1857,6 +2053,16 @@ function impPrepare(allRows){
   const headers = allRows[best.idx].map(h => String(h).trim());
   imp = { headers, rows: allRows.slice(best.idx + 1), map: autoMap(headers) };
   impRender();
+}
+
+// Spočítá čisté množství po symbolech (nákupy - prodeje), aby šlo poznat aktivní pozice
+function netQtyBySymbol(txs){
+  const net = {};
+  for (const t of txs){
+    const ys = yahooGuess(t.symbol);
+    net[ys] = (net[ys] || 0) + (t.kind === 'buy' ? t.qty : -t.qty);
+  }
+  return net;
 }
 
 function autoMap(headers){
@@ -1896,7 +2102,7 @@ function parseAnyDate(s){
     const n = parseFloat(s);
     if (n > 20000 && n < 80000) return Math.round((n - 25569) * 86400000);
   }
-  let m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:[ T](\d{1,2}):(\d{2}))?/);   // 31.12.2024 14:30
+  let m = s.match(/^(\d{1,2})\.\s*(\d{1,2})\.\s*(\d{4})(?:[ T](\d{1,2}):(\d{2}))?/);   // 31.12.2024 i "6. 11. 2025"
   if (m) return new Date(+m[3], +m[2]-1, +m[1], +(m[4]||0), +(m[5]||0)).getTime();
   m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);                                   // 2024-12-31 / ISO
   if (m){ const d = new Date(s); return isNaN(d) ? new Date(+m[1], +m[2]-1, +m[3]).getTime() : d.getTime(); }
@@ -1933,6 +2139,20 @@ function isDupTx(ysym, tx){
 }
 
 function impParseRows(){
+  // Broker formát (XTB / Revolut) – transakce už jsou hotové
+  if (imp.brokerTxs){
+    const net = netQtyBySymbol(imp.brokerTxs);
+    let id = 0;
+    return imp.brokerTxs.map(t => {
+      const ysym = yahooGuess(t.symbol);
+      const tx = {symbol:t.symbol, cur:t.cur, kind:t.kind, date:t.date,
+        qty:t.qty, price:t.price, fee:t.fee||0, id:'r'+(id++)};
+      tx.dup = isDupTx(ysym, tx);
+      tx.activeSymbol = (net[ysym] || 0) > 1e-6;  // patří k aktuálně držené pozici?
+      return tx;
+    });
+  }
+
   const m = imp.map; const out = []; let id = 0;
   for (const r of imp.rows){
     const get = role => (m[role] != null) ? String(r[m[role]] ?? '').trim() : '';
@@ -1972,13 +2192,30 @@ function impParseRows(){
   return out;
 }
 
+let impActiveOnly = true;   // výchozí: nabídnout jen aktivní pozice
+
 function impRender(){
   imp.txs = impParseRows();
   const valid = imp.txs.filter(t => !t.reason);
   const skipped = imp.txs.filter(t => t.reason);
-  const syms = [...new Set(valid.map(t => t.symbol))];
+  const isBroker = !!imp.brokerTxs;
 
-  const mappingHTML = `
+  // Aktivní vs uzavřené (jen u broker importu, kde víme čisté množství)
+  const active = valid.filter(t => t.activeSymbol);
+  const closed = valid.filter(t => !t.activeSymbol);
+  const shown = isBroker && impActiveOnly ? active : valid;
+  const syms = [...new Set(shown.map(t => t.symbol))];
+
+  // Hlavička podle typu importu
+  const headerHTML = isBroker ? `
+    <div class="small muted" style="margin:8px 0">
+      Rozpoznán výpis <b>${imp.broker}</b> – nalezeno ${valid.length} obchodů
+      (${active.length} u aktivních pozic, ${closed.length} u uzavřených).
+      ${imp.broker === 'Revolut' ? 'Ceny za kus jsou dopočítané z hodnoty a počtu kusů.' : ''}</div>
+    <label style="display:flex; align-items:center; gap:10px; padding:10px; background:var(--card2); border-radius:10px; margin-bottom:8px; cursor:pointer">
+      <input type="checkbox" ${impActiveOnly ? 'checked' : ''} onchange="impToggleActive(this.checked)" style="width:auto; margin:0">
+      <span class="small">Zobrazit jen <b>aktivní pozice</b> (které stále držíš) – skryje dávno prodané a zrušené tituly</span>
+    </label>` : `
     <details style="margin:12px 0">
       <summary class="small" style="cursor:pointer; color:var(--accent); font-weight:600">Mapování sloupců (automaticky rozpoznáno – rozklikni pro úpravu)</summary>
       <div style="margin-top:10px">
@@ -2000,15 +2237,10 @@ function impRender(){
           <input data-symmap="${esc(s)}" value="${esc(yahooGuess(s))}" style="margin:0; padding:8px"
             autocapitalize="characters" autocomplete="off">
         </div>`).join('')}
-      <div class="tiny muted">Přípony burz XTB se převádí automaticky (.UK→.L, .US→nic, .CZ→.PR…). Pokud si nejsi jistý, ověř symbol vyhledáváním v záložce Portfolio.</div>
+      <div class="tiny muted">Přípony burz se převádí automaticky (.UK→.L, .US→nic, .CZ→.PR…). Pokud si nejsi jistý, ověř symbol vyhledáváním v záložce Portfolio.</div>
     </div>` : '';
 
-  const listHTML = `
-    <div style="display:flex; gap:8px; margin:10px 0">
-      <button class="btn ghost" style="padding:8px; font-size:13px" onclick="impCheckAll(true)">Vybrat vše</button>
-      <button class="btn ghost" style="padding:8px; font-size:13px" onclick="impCheckAll(false)">Zrušit výběr</button>
-    </div>
-    ${valid.map(t => `
+  const txRow = (t) => `
       <label style="display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid var(--line); cursor:pointer">
         <input type="checkbox" id="imp-${t.id}" ${t.dup ? '' : 'checked'} style="width:auto; margin:0">
         <div style="flex:1; min-width:0">
@@ -2016,7 +2248,17 @@ function impRender(){
             <span class="num">${fmtQty(t.qty)} ks × ${t.price}${t.cur ? ' ' + t.cur : ''}</span></div>
           <div class="tiny muted">${fmtDate(t.date)}${t.fee ? ' · poplatek ' + t.fee : ''}${t.dup ? ' · <span class="down">duplicitní – už je v aplikaci</span>' : ''}</div>
         </div>
-      </label>`).join('')}
+      </label>`;
+
+  const listHTML = `
+    <div style="display:flex; gap:8px; margin:10px 0">
+      <button class="btn ghost" style="padding:8px; font-size:13px" onclick="impCheckAll(true)">Vybrat vše</button>
+      <button class="btn ghost" style="padding:8px; font-size:13px" onclick="impCheckAll(false)">Zrušit výběr</button>
+    </div>
+    ${shown.map(txRow).join('')}
+    ${(isBroker && impActiveOnly && closed.length) ? `
+      <div class="tiny muted" style="margin-top:10px; padding:8px; background:var(--card2); border-radius:8px">
+        Skryto ${closed.length} transakcí u ${[...new Set(closed.map(t=>t.symbol))].length} uzavřených pozic. Zobraz je vypnutím „jen aktivní pozice" výše.</div>` : ''}
     ${skipped.length ? `
       <details style="margin-top:10px">
         <summary class="tiny muted" style="cursor:pointer">Přeskočené řádky (${skipped.length}) – dividendy, vklady, neúplné…</summary>
@@ -2025,12 +2267,14 @@ function impRender(){
             ${esc(t.symbol)} – ${esc(t.reason)}</div>`).join('')}
       </details>` : ''}`;
 
-  document.getElementById('impBody').innerHTML = mappingHTML + symMapHTML +
-    (valid.length
+  document.getElementById('impBody').innerHTML = headerHTML + symMapHTML +
+    (shown.length
       ? listHTML + `<button class="btn primary" id="impGo" style="margin-top:14px"
           onclick="impDoImport()">Importovat vybrané transakce</button>`
-      : '<div class="small down" style="margin-top:10px">Nenašel jsem žádné importovatelné obchody. Zkontroluj mapování sloupců výše.</div>');
+      : '<div class="small down" style="margin-top:10px">Nenašel jsem žádné importovatelné obchody.</div>');
 }
+
+function impToggleActive(on){ impActiveOnly = on; impRender(); }
 
 function impSetMap(role, v){
   imp.map[role] = v === '' ? null : parseInt(v);
@@ -2152,11 +2396,12 @@ async function start(){
   refreshDividends();
 }
 start();
-setInterval(() => { if (!document.hidden) refreshAll(); }, 30000);
+// Auto-refresh každé 3 minuty – pro sledování portfolia dostačuje a šetří Yahoo
+setInterval(() => { if (!document.hidden) refreshAll(); }, 180000);
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden){
-    refreshAll();
-    // Při návratu do appky znovu zamkni, pokud je zámek zapnutý
+    // Obnov při návratu, ale ne víc než jednou za 60 s (ochrana proti blokaci)
+    if (!lastRefresh || Date.now() - lastRefresh.getTime() > 60000) refreshAll();
     if (lockConfig().enabled && !document.getElementById('lockScreen')) showLockScreen();
   }
 });
