@@ -11,6 +11,7 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="icon-180.png">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
   :root{
     --bg:#0b1220; --card:#141d31; --card2:#1b2740; --line:#243352;
@@ -118,6 +119,35 @@
     background:var(--card2); border:1px solid var(--line); color:var(--text);
     padding:10px 18px; border-radius:99px; font-size:13px; font-weight:600;
     box-shadow:0 6px 24px rgba(0,0,0,.4)}
+
+  .logowrap{position:relative; width:34px; height:34px; flex-shrink:0; display:inline-block}
+  .logowrap img{width:34px; height:34px; border-radius:9px; object-fit:contain;
+    background:#fff; display:block}
+  .mono{display:none; width:34px; height:34px; border-radius:9px; color:#fff;
+    align-items:center; justify-content:center; font-weight:800; font-size:16px}
+  .rowlogo{display:flex; align-items:center; gap:11px; min-width:0}
+
+  .prepost{font-size:11px; color:var(--muted); margin-top:3px}
+  .prepost b{color:var(--text)}
+
+  .bench-bar{display:flex; gap:6px; flex-wrap:wrap; margin-top:10px}
+  .bench-bar button{font-size:11px; padding:5px 10px; border-radius:99px; cursor:pointer;
+    border:1px solid var(--line); background:var(--card2); color:var(--muted); font-family:inherit; font-weight:600}
+  .bench-bar button.on{color:#fff}
+  .bench-bar button.bsp.on{background:#f5b941; border-color:#f5b941; color:#1a1205}
+  .bench-bar button.bnq.on{background:#c77dff; border-color:#c77dff}
+
+  .lock{position:fixed; inset:0; z-index:100; background:var(--bg);
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:18px;
+    padding:env(safe-area-inset-top) 24px}
+  .lock .icon{font-size:54px}
+  .lock h2{margin:0; font-size:20px}
+  .lock p{color:var(--muted); text-align:center; margin:0; max-width:300px; line-height:1.5}
+
+  .gauge{height:7px; border-radius:99px; background:linear-gradient(90deg,#ff6b6b,#f5b941,#3ddc97); position:relative; margin:8px 0}
+  .gauge .pin{position:absolute; top:-4px; width:3px; height:15px; background:#fff; border-radius:2px; transform:translateX(-50%)}
+  .range52{display:flex; justify-content:space-between; font-size:11px; color:var(--muted); margin-top:3px}
+  .recbadge{display:inline-block; padding:3px 10px; border-radius:99px; font-weight:700; font-size:13px}
 </style>
 </head>
 <body>
@@ -207,15 +237,67 @@ async function yahoo(params){
 }
 
 async function fetchQuote(symbol){
-  const j = await yahoo({endpoint:'chart', symbol, range:'1d', interval:'5m'});
+  const j = await yahoo({endpoint:'chart', symbol, range:'1d', interval:'5m', prepost:'1'});
   const m = j?.chart?.result?.[0]?.meta;
   if (!m || m.regularMarketPrice == null) throw new Error('no quote');
   return {
     symbol,
     price: m.regularMarketPrice,
     prev: m.chartPreviousClose ?? m.previousClose ?? m.regularMarketPrice,
-    currency: m.currency || 'USD'
+    currency: m.currency || 'USD',
+    // Pre-market / po-burzovní (jen u US akcií, jinak undefined)
+    pre:  m.preMarketPrice  ?? null,
+    post: m.postMarketPrice ?? null,
+    state: m.marketState || null   // PRE, REGULAR, POST, CLOSED
   };
+}
+
+// Detailní fundamenty (P/E, 52t rozpětí, doporučení, earnings termín)
+const summaryCache = {};
+async function fetchSummary(symbol){
+  if (summaryCache[symbol]) return summaryCache[symbol];
+  try{
+    const j = await yahoo({endpoint:'quoteSummary', symbol});
+    const r = j?.quoteSummary?.result?.[0];
+    if (!r) return null;
+    const sd = r.summaryDetail || {}, ks = r.defaultKeyStatistics || {},
+          fd = r.financialData || {}, ce = r.calendarEvents || {},
+          rt = r.recommendationTrend?.trend || [], eh = r.earningsHistory?.history || [];
+    const out = {
+      pe: sd.trailingPE?.raw ?? ks.trailingPE?.raw ?? null,
+      forwardPE: sd.forwardPE?.raw ?? null,
+      low52: sd.fiftyTwoWeekLow?.raw ?? null,
+      high52: sd.fiftyTwoWeekHigh?.raw ?? null,
+      divYield: sd.dividendYield?.raw ?? null,
+      targetMean: fd.targetMeanPrice?.raw ?? null,
+      recKey: fd.recommendationKey ?? null,        // buy / hold / sell…
+      recMean: fd.recommendationMean?.raw ?? null, // 1=strong buy … 5=sell
+      numAnalysts: fd.numberOfAnalystOpinions?.raw ?? null,
+      nextEarnings: ce.earnings?.earningsDate?.[0]?.raw
+        ? ce.earnings.earningsDate[0].raw * 1000 : null,
+      recTrend: rt.slice(0,1).map(t => ({
+        strongBuy:+t.strongBuy, buy:+t.buy, hold:+t.hold, sell:+t.sell, strongSell:+t.strongSell
+      }))[0] || null,
+      earningsHistory: eh.map(e => ({
+        date: e.quarter?.raw ? e.quarter.raw*1000 : null,
+        actual: e.epsActual?.raw ?? null,
+        estimate: e.epsEstimate?.raw ?? null,
+        surprisePct: e.surprisePercent?.raw != null ? e.surprisePercent.raw*100 : null
+      })).filter(e => e.actual != null).slice(-4)
+    };
+    summaryCache[symbol] = out;
+    return out;
+  }catch(e){ return null; }
+}
+
+// Historická řada pro benchmark (S&P 500, Nasdaq…) – normalizovaná na % od začátku
+const benchCache = {};
+async function fetchBenchmark(symbol, rangeKey){
+  const key = symbol + rangeKey;
+  if (benchCache[key]) return benchCache[key];
+  const h = await fetchHistory(symbol, rangeKey);
+  benchCache[key] = h.points;
+  return h.points;
 }
 
 const RANGES = [
@@ -352,6 +434,74 @@ function trailingDividends(){
   return sum;
 }
 
+// Logo firmy – přes veřejnou službu logo.dev podle domény / tickeru.
+// Když logo neexistuje, onerror v <img> ho schová a zůstane barevný monogram.
+function logoURL(h){
+  const base = (h.symbol || '').split('.')[0].split('-')[0].toLowerCase();
+  return `https://img.logo.dev/ticker/${encodeURIComponent(base)}?token=pk_demo&size=80&format=png&retina=true`;
+}
+function monogram(h){
+  const c = (h.symbol || '?')[0].toUpperCase();
+  const colors = ['#5b8cff','#3ddc97','#f5b941','#c77dff','#ff8fab','#4cc9f0'];
+  const idx = (h.symbol || '').split('').reduce((s,ch) => s + ch.charCodeAt(0), 0) % colors.length;
+  return `<span class="mono" style="background:${colors[idx]}">${c}</span>`;
+}
+function logoHTML(h){
+  return `<span class="logowrap">
+    <img src="${logoURL(h)}" alt="" loading="lazy"
+      onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+    ${monogram(h)}</span>`;
+}
+
+/* Rekonstrukce historické hodnoty portfolia z transakcí + historických cen.
+   Broker minulé denní hodnoty nedává – sestavujeme „kolik by tehdejší pozice stály".
+   Vrací řadu v zobrazovací měně (FX bereme aktuální, kvůli jednoduchosti). */
+async function buildPortfolioHistory(rangeKey){
+  const hs = activeHoldings();
+  if (!hs.length) return {portfolio:[], invested:[]};
+
+  const histories = {};
+  await Promise.allSettled(hs.map(async h => {
+    try{ histories[h.symbol] = (await fetchHistory(h.symbol, rangeKey)).points; }
+    catch(e){ histories[h.symbol] = []; }
+  }));
+
+  // Sjednocená osa dat
+  const dateSet = new Set();
+  Object.values(histories).forEach(pts => pts.forEach(p => dateSet.add(p.t)));
+  const dates = [...dateSet].sort((a,b) => a - b);
+  if (!dates.length) return {portfolio:[], invested:[]};
+
+  // Rychlé vyhledání ceny k datu (poslední známá ≤ t)
+  const priceAt = (pts, t) => {
+    let lo = 0, hi = pts.length - 1, ans = null;
+    while (lo <= hi){ const mid = (lo+hi)>>1;
+      if (pts[mid].t <= t){ ans = pts[mid].c; lo = mid+1; } else hi = mid-1; }
+    return ans;
+  };
+
+  const portfolio = [], invested = [];
+  for (const t of dates){
+    let val = 0, inv = 0;
+    for (const h of hs){
+      // Množství a investice držené k tomuto datu
+      let qty = 0, cost = 0;
+      for (const tx of sortedTxs(h)){
+        if (tx.date > t) break;
+        if (tx.kind === 'buy'){ qty += tx.qty; cost += tx.qty*tx.price + (tx.fee||0); }
+        else { const a = qty>0?cost/qty:0; cost -= a*tx.qty; qty -= tx.qty; }
+      }
+      if (qty <= 1e-9) continue;
+      const px = priceAt(histories[h.symbol] || [], t);
+      if (px == null) continue;
+      val += toDisplay(px * qty, hCurrency(h));
+      inv += toDisplay(cost, h.currency);
+    }
+    if (val > 0){ portfolio.push({t, c: val}); invested.push({t, c: inv}); }
+  }
+  return {portfolio, invested};
+}
+
 /* =========================================================
    REFRESH DAT + ALERTY
 ========================================================= */
@@ -466,11 +616,13 @@ function renderDash(){
 
   const movers = hs.filter(h => quotes[h.symbol])
     .sort((a,b) => Math.abs(qChangePct(quotes[b.symbol])) - Math.abs(qChangePct(quotes[a.symbol])))
-    .slice(0,3);
+    .slice(0,4);
 
-  const byType = ['Akcie','ETF','Krypto'].map(type => ({
-    type, value: hs.filter(h => h.type === type).reduce((s,h) => s + hValue(h), 0)
-  })).filter(x => x.value > 0);
+  // Rozpad na jednotlivé tituly (ne jen podle typu)
+  const bySymbol = hs.map(h => ({h, value: hValue(h)}))
+    .filter(x => x.value > 0)
+    .sort((a,b) => b.value - a.value);
+  const palette = ['#5b8cff','#3ddc97','#f5b941','#c77dff','#ff8fab','#4cc9f0','#ffa94d','#69db7c','#da77f2','#ff8787'];
 
   view.innerHTML = `
     <div class="card">
@@ -489,16 +641,39 @@ function renderDash(){
       </div>
     </div>
 
-    ${byType.length ? `
+    ${hs.length ? `
     <div class="card">
-      <h3>Rozložení portfolia</h3>
-      <div class="chartwrap short"><canvas id="allocChart"></canvas></div>
-      ${byType.map(x => `
-        <div class="row" style="cursor:default">
-          <div class="l"><span class="sym">${x.type}</span></div>
-          <div class="r"><span class="small muted num">${(t.value ? x.value/t.value*100 : 0).toFixed(1)} %</span>
-            &nbsp; <b class="num">${fmtMoney(x.value, code, 0)}</b></div>
-        </div>`).join('')}
+      <h3>Vývoj portfolia</h3>
+      <div class="seg" style="margin-bottom:10px">
+        ${RANGES.filter(r => r.key !== '1d').map(r => `<button class="${r.key===dashRange?'active':''}"
+          onclick="setDashRange('${r.key}')">${r.label}</button>`).join('')}
+      </div>
+      <div class="chartwrap"><canvas id="portChart"></canvas><div id="portLoading" class="muted small"
+        style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center">Počítám historii…</div></div>
+      <div class="bench-bar">
+        <button class="bench-bar bsp ${dashBench.sp ? 'on':''}" onclick="toggleBench('sp')">vs S&P 500</button>
+        <button class="bench-bar bnq ${dashBench.nq ? 'on':''}" onclick="toggleBench('nq')">vs Nasdaq 100</button>
+        <span class="tiny muted" style="align-self:center">srovnání v % od začátku období</span>
+      </div>
+    </div>` : ''}
+
+    ${bySymbol.length ? `
+    <div class="card">
+      <h3>Zastoupení v portfoliu</h3>
+      <div style="display:flex; gap:16px; align-items:center">
+        <div style="width:120px; height:120px; flex-shrink:0; position:relative">
+          <canvas id="allocChart"></canvas></div>
+        <div style="flex:1; min-width:0">
+          ${bySymbol.map((x,i) => {
+            const pct = t.value ? x.value/t.value*100 : 0;
+            return `<div onclick="openDetail('${x.h.id}')" style="display:flex; align-items:center; gap:8px; padding:4px 0; cursor:pointer">
+              <span style="width:9px; height:9px; border-radius:2px; background:${palette[i%palette.length]}; flex-shrink:0"></span>
+              <span class="small" style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">${esc(x.h.symbol)}</span>
+              <span class="small num" style="font-weight:700">${pct.toFixed(1)} %</span>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>
     </div>` : ''}
 
     ${movers.length ? `
@@ -523,15 +698,81 @@ function renderDash(){
       Zatím žádné investice.<br>Přidej první pozici v záložce <b>Portfolio</b>.</div>`}
   `;
 
-  if (byType.length){
+  if (bySymbol.length){
     charts.push(new Chart(document.getElementById('allocChart'), {
       type:'doughnut',
-      data:{ labels: byType.map(x=>x.type),
-        datasets:[{ data: byType.map(x=>x.value),
-          backgroundColor:['#5b8cff','#3ddc97','#f5b941'], borderWidth:0 }]},
-      options:{ cutout:'68%', plugins:{legend:{display:false}}, maintainAspectRatio:false }
+      data:{ labels: bySymbol.map(x=>x.h.symbol),
+        datasets:[{ data: bySymbol.map(x=>x.value),
+          backgroundColor: bySymbol.map((_,i)=>palette[i%palette.length]), borderWidth:0 }]},
+      options:{ cutout:'62%', plugins:{legend:{display:false},
+        tooltip:{callbacks:{label:c=>c.label+': '+fmtMoney(c.parsed, code, 0)}}}, maintainAspectRatio:false }
     }));
   }
+  if (hs.length) drawPortfolioChart();
+}
+
+let dashRange = '6mo';
+let dashBench = {sp:false, nq:false};
+function setDashRange(r){ dashRange = r; renderDash(); }
+function toggleBench(k){ dashBench[k] = !dashBench[k]; renderDash(); }
+
+async function drawPortfolioChart(){
+  const canvas = document.getElementById('portChart');
+  if (!canvas) return;
+  const {portfolio, invested} = await buildPortfolioHistory(dashRange);
+  const loading = document.getElementById('portLoading');
+  if (loading) loading.style.display = 'none';
+  if (!portfolio.length || !document.getElementById('portChart')) return;
+
+  const code = state.settings.currency;
+  const showBench = dashBench.sp || dashBench.nq;
+  const base = portfolio[0].c;
+  const labels = portfolio.map(p => new Date(p.t).toLocaleDateString('cs-CZ', {day:'numeric',month:'numeric',year:'2-digit'}));
+
+  const datasets = [];
+  if (showBench){
+    // Režim srovnání: vše v % od začátku
+    datasets.push({ label:'Portfolio', data: portfolio.map(p => (p.c/base-1)*100),
+      borderColor:'#3ddc97', borderWidth:2, pointRadius:0, tension:.25, yAxisID:'y' });
+    const addBench = async (sym, color, label) => {
+      const pts = await fetchBenchmark(sym, dashRange);
+      if (!pts.length) return;
+      const b0 = pts[0].c;
+      const map = {}; pts.forEach(p => { map[new Date(p.t).toDateString()] = p.c; });
+      const series = portfolio.map(p => {
+        const v = map[new Date(p.t).toDateString()];
+        return v != null ? (v/b0-1)*100 : null;
+      });
+      datasets.push({ label, data: series, borderColor: color, borderWidth:1.5,
+        pointRadius:0, tension:.25, borderDash:[5,3], yAxisID:'y', spanGaps:true });
+    };
+    if (dashBench.sp) await addBench('^GSPC', '#f5b941', 'S&P 500');
+    if (dashBench.nq) await addBench('^NDX', '#c77dff', 'Nasdaq 100');
+  } else {
+    const isUp = portfolio[portfolio.length-1].c >= base;
+    const color = isUp ? '#3ddc97' : '#ff6b6b';
+    const ctx = canvas.getContext('2d');
+    const grad = ctx.createLinearGradient(0,0,0,220);
+    grad.addColorStop(0, color+'40'); grad.addColorStop(1, color+'00');
+    datasets.push({ label:'Hodnota', data: portfolio.map(p=>p.c), borderColor:color,
+      backgroundColor:grad, fill:true, pointRadius:0, borderWidth:2, tension:.25, yAxisID:'y' });
+    datasets.push({ label:'Vloženo', data: invested.map(p=>p.c), borderColor:'#5b6884',
+      borderWidth:1.5, pointRadius:0, borderDash:[4,4], tension:.1, yAxisID:'y' });
+  }
+
+  destroyChartById('portChart');
+  charts.push(new Chart(canvas, {
+    type:'line', data:{labels, datasets},
+    options:{ maintainAspectRatio:false, interaction:{intersect:false, mode:'index'},
+      plugins:{ legend:{display:showBench || true, labels:{color:CHART_TICK, boxWidth:12, font:{size:10}}},
+        tooltip:{callbacks:{label: c => showBench
+          ? c.dataset.label+': '+(c.parsed.y>=0?'+':'')+c.parsed.y.toFixed(1)+' %'
+          : c.dataset.label+': '+fmtMoney(c.parsed.y, code, 0)}}},
+      scales:{ x:{grid:{display:false}, ticks:{color:CHART_TICK, maxTicksLimit:5, maxRotation:0}},
+        y:{grid:{color:CHART_GRID}, ticks:{color:CHART_TICK, maxTicksLimit:5,
+          callback: v => showBench ? v.toFixed(0)+'%' : v}}}
+    }
+  }));
 }
 
 function rowHolding(h){
@@ -539,9 +780,12 @@ function rowHolding(h){
   const pct = q ? qChangePct(q) : 0;
   return `
     <div class="row" onclick="openDetail('${h.id}')">
-      <div class="l">
-        <div class="sym">${esc(h.symbol)}</div>
-        <div class="name">${esc(h.name)}</div>
+      <div class="rowlogo">
+        ${logoHTML(h)}
+        <div class="l">
+          <div class="sym">${esc(h.symbol)}</div>
+          <div class="name">${esc(h.name)}</div>
+        </div>
       </div>
       <div class="r">
         <div class="num" style="font-weight:600">${q ? fmtMoney(q.price, q.currency) : '…'}</div>
@@ -561,7 +805,10 @@ function renderPortfolio(){
     .filter(g => g.items.length);
 
   view.innerHTML = `
-    <button class="btn primary" onclick="openSearch('holding')" style="margin-bottom:14px">＋ Přidat pozici</button>
+    <div class="grid2" style="margin-bottom:14px">
+      <button class="btn primary" onclick="openSearch('holding')">＋ Přidat pozici</button>
+      <button class="btn ghost" onclick="openImport()">⇪ Import z brokera</button>
+    </div>
     ${groups.map(g => `
       <div class="card">
         <h3>${g.type}</h3>
@@ -572,9 +819,12 @@ function renderPortfolio(){
           const dayPct = q ? qChangePct(q) : 0;
           return `
           <div class="row" onclick="openDetail('${h.id}')">
-            <div class="l">
-              <div class="sym">${esc(h.symbol)}</div>
-              <div class="name num">${fmtQty(holdingQty(h))} ks · ø ${fmtMoney(avgCost(h), h.currency)}</div>
+            <div class="rowlogo">
+              ${logoHTML(h)}
+              <div class="l">
+                <div class="sym">${esc(h.symbol)}</div>
+                <div class="name num">${fmtQty(holdingQty(h))} ks · nyní ${q ? fmtMoney(q.price, q.currency) : '…'}</div>
+              </div>
             </div>
             <div class="r">
               <div class="num" style="font-weight:600">${fmtMoney(value, code, 0)}</div>
@@ -612,26 +862,46 @@ async function renderDetail(){
   const plPct = cost ? pl/cost*100 : 0;
   const real = toDisplay(realizedPL(h), h.currency);
 
+  // Pre/post market řádek
+  let prepost = '';
+  if (q && q.pre != null && q.state === 'PRE'){
+    const d = q.prev ? (q.pre - q.price) : 0;
+    prepost = `<div class="prepost">Předburzovně: <b>${fmtMoney(q.pre, q.currency)}</b>
+      <span class="${cls(q.pre - q.price)}">(${fmtPct((q.pre/q.price-1)*100)})</span></div>`;
+  } else if (q && q.post != null && q.state === 'POST'){
+    prepost = `<div class="prepost">Po zavření: <b>${fmtMoney(q.post, q.currency)}</b>
+      <span class="${cls(q.post - q.price)}">(${fmtPct((q.post/q.price-1)*100)})</span></div>`;
+  }
+
   view.innerHTML = `
     <button class="back" onclick="closeDetail()">‹ Zpět</button>
 
     <div class="card">
-      <div class="name" style="max-width:none">${esc(h.name)}</div>
+      <div class="rowlogo" style="margin-bottom:8px">
+        ${logoHTML(h)}
+        <div class="name" style="max-width:none; margin:0">${esc(h.name)}</div>
+      </div>
       <div class="big num">${q ? fmtMoney(q.price, q.currency) : '…'}</div>
       ${q ? `<span class="pill ${cls(qChangePct(q))} num">
         ${fmtMoney(q.price-q.prev, q.currency)} (${fmtPct(qChangePct(q))}) dnes</span>` : ''}
+      ${prepost}
       <div class="seg" style="margin-top:14px">
         ${RANGES.map(r => `<button class="${r.key===detailRange?'active':''}"
           onclick="setRange('${r.key}')">${r.label}</button>`).join('')}
       </div>
       <div class="chartwrap"><canvas id="priceChart"></canvas></div>
+      <div id="earnMarkers" class="tiny muted" style="margin-top:6px"></div>
     </div>
+
+    <div id="fundBox"></div>
 
     <div class="card">
       <h3>Moje pozice</h3>
       <div class="grid2">
         <div class="stat"><div class="label">Množství</div><div class="v num">${fmtQty(holdingQty(h))}</div></div>
-        <div class="stat"><div class="label">Prům. cena</div><div class="v num">${fmtMoney(avgCost(h), h.currency)}</div></div>
+        <div class="stat"><div class="label">Aktuální cena / ks</div><div class="v num">${q ? fmtMoney(q.price, q.currency) : '…'}</div></div>
+        <div class="stat"><div class="label">Prům. nákup / ks</div><div class="v num">${fmtMoney(avgCost(h), h.currency)}</div></div>
+        <div class="stat"><div class="label">Zisk / ks</div><div class="v num ${cls((q?q.price:0)-avgCost(h))}">${q ? fmtMoney(q.price - avgCost(h), h.currency) : '–'}</div></div>
         <div class="stat"><div class="label">Hodnota</div><div class="v num">${fmtMoney(value, code, 0)}</div></div>
         <div class="stat"><div class="label">Vloženo</div><div class="v num">${fmtMoney(cost, code, 0)}</div></div>
         <div class="stat"><div class="label">Nereal. P/L</div>
@@ -639,9 +909,11 @@ async function renderDetail(){
         <div class="stat"><div class="label">Real. P/L</div>
           <div class="v num ${cls(real)}">${fmtMoney(real, code, 0)}</div></div>
       </div>
+      ${h.currency !== code ? `<div id="fxBox" style="margin-top:10px"></div>` : ''}
     </div>
 
     <div id="earnBox"></div>
+    <div id="recBox"></div>
 
     <div class="card">
       <h3 style="display:flex; justify-content:space-between; align-items:center">Transakce
@@ -668,9 +940,8 @@ async function renderDetail(){
 
   drawPriceChart(h);
   loadDetailExtras(h);
+  loadFundamentals(h);
 }
-
-function setRange(r){ detailRange = r; detailCache = {}; renderDetail(); }
 
 async function drawPriceChart(h){
   const canvas = document.getElementById('priceChart');
@@ -690,6 +961,21 @@ async function drawPriceChart(h){
       : d.toLocaleDateString('cs-CZ', {day:'numeric', month:'numeric', year:'2-digit'});
   });
 
+  // Body earnings z historie (zobrazí se jako oranžové tečky na křivce)
+  const eps = (summaryCache[h.symbol]?.earningsHistory || []);
+  const pointStyle = pts.map(() => 0);
+  const pointColors = pts.map(() => color);
+  eps.forEach(e => {
+    if (!e.date) return;
+    // najdi nejbližší bod grafu
+    let bi = -1, best = Infinity;
+    pts.forEach((p,i) => { const d = Math.abs(p.t - e.date); if (d < best){ best = d; bi = i; } });
+    if (bi >= 0 && best < 6*86400e3){
+      pointStyle[bi] = 5;
+      pointColors[bi] = (e.surprisePct ?? 0) >= 0 ? '#3ddc97' : '#ff6b6b';
+    }
+  });
+
   destroyChartById('priceChart');
   const ctx = canvas.getContext('2d');
   const grad = ctx.createLinearGradient(0,0,0,220);
@@ -698,7 +984,8 @@ async function drawPriceChart(h){
   charts.push(new Chart(canvas, {
     type:'line',
     data:{ labels, datasets:[{ data: pts.map(p=>p.c), borderColor:color, backgroundColor:grad,
-      fill:true, pointRadius:0, borderWidth:2, tension:.25 }]},
+      fill:true, pointRadius:pointStyle, pointBackgroundColor:pointColors, pointBorderColor:pointColors,
+      borderWidth:2, tension:.25 }]},
     options:{
       maintainAspectRatio:false, interaction:{intersect:false, mode:'index'},
       plugins:{ legend:{display:false},
@@ -709,7 +996,94 @@ async function drawPriceChart(h){
       }
     }
   }));
+
+  const em = document.getElementById('earnMarkers');
+  if (em && eps.length) em.innerHTML = '🟢/🔴 tečky v grafu = kvartální výsledky (zelená = překonání odhadu EPS, červená = zaostání)';
 }
+
+const REC_LABELS = {
+  strong_buy:'Silný nákup', buy:'Nákup', hold:'Držet', sell:'Prodej', strong_sell:'Silný prodej',
+  underperform:'Pod trhem', outperform:'Nad trhem'
+};
+const REC_COLORS = {
+  strong_buy:'#1e9e6a', buy:'#3ddc97', hold:'#f5b941', sell:'#ff8787', strong_sell:'#ff6b6b',
+  underperform:'#ff8787', outperform:'#3ddc97'
+};
+
+async function loadFundamentals(h){
+  if (h.symbol.includes('-')) return;  // krypto fundamenty nemá
+  const s = await fetchSummary(h.symbol);
+  if (!s || detailId !== h.id) return;
+  const q = quotes[h.symbol];
+
+  // Fundamenty: P/E, 52t rozpětí
+  const fund = document.getElementById('fundBox');
+  if (fund){
+    let rangeHTML = '';
+    if (s.low52 != null && s.high52 != null && q){
+      const pct = Math.max(0, Math.min(100, (q.price - s.low52)/(s.high52 - s.low52)*100));
+      rangeHTML = `
+        <div style="margin-top:10px">
+          <div class="label">52týdenní rozpětí</div>
+          <div class="gauge"><div class="pin" style="left:${pct}%"></div></div>
+          <div class="range52"><span class="num">${fmtMoney(s.low52, h.currency)}</span>
+            <span class="num">${fmtMoney(s.high52, h.currency)}</span></div>
+        </div>`;
+    }
+    fund.innerHTML = `<div class="card">
+      <h3>Ukazatele</h3>
+      <div class="grid2">
+        ${s.pe != null ? `<div class="stat"><div class="label">P/E (trailing)</div><div class="v num">${s.pe.toFixed(1)}</div></div>` : ''}
+        ${s.forwardPE != null ? `<div class="stat"><div class="label">P/E (forward)</div><div class="v num">${s.forwardPE.toFixed(1)}</div></div>` : ''}
+        ${s.divYield != null ? `<div class="stat"><div class="label">Div. výnos</div><div class="v num">${(s.divYield*100).toFixed(2)} %</div></div>` : ''}
+        ${s.targetMean != null ? `<div class="stat"><div class="label">Cílová cena (analytici)</div><div class="v num">${fmtMoney(s.targetMean, h.currency)}</div></div>` : ''}
+      </div>
+      ${rangeHTML}
+    </div>`;
+  }
+
+  // Doporučení analytiků
+  const rec = document.getElementById('recBox');
+  if (rec && (s.recKey || s.recTrend)){
+    const key = (s.recKey || '').toLowerCase();
+    const label = REC_LABELS[key] || s.recKey || '–';
+    const color = REC_COLORS[key] || '#5b8cff';
+    let bars = '';
+    if (s.recTrend){
+      const tr = s.recTrend, tot = tr.strongBuy+tr.buy+tr.hold+tr.sell+tr.strongSell || 1;
+      const seg = [['Silný nákup',tr.strongBuy,'#1e9e6a'],['Nákup',tr.buy,'#3ddc97'],
+        ['Držet',tr.hold,'#f5b941'],['Prodej',tr.sell,'#ff8787'],['Silný prodej',tr.strongSell,'#ff6b6b']];
+      bars = `<div style="display:flex; height:10px; border-radius:5px; overflow:hidden; margin:10px 0 6px">
+        ${seg.map(([,n,c]) => n>0 ? `<div style="width:${n/tot*100}%; background:${c}"></div>` : '').join('')}</div>
+        <div class="tiny muted">${seg.filter(([,n])=>n>0).map(([l,n])=>`${l}: ${n}`).join(' · ')}</div>`;
+    }
+    rec.innerHTML = `<div class="card">
+      <h3>Doporučení analytiků</h3>
+      <div style="display:flex; align-items:center; gap:10px">
+        <span class="recbadge" style="background:${color}22; color:${color}">${label}</span>
+        ${s.numAnalysts ? `<span class="tiny muted">${s.numAnalysts} analytiků</span>` : ''}
+        ${s.targetMean != null && q ? `<span class="tiny ${cls(s.targetMean-q.price)}" style="margin-left:auto">
+          potenciál ${fmtPct((s.targetMean/q.price-1)*100)}</span>` : ''}
+      </div>
+      ${bars}
+    </div>`;
+  }
+
+  // Měnový dopad (jen když se měna aktiva liší od zobrazovací)
+  const code = state.settings.currency;
+  const fxBox = document.getElementById('fxBox');
+  if (fxBox && h.currency !== code){
+    const rate = fx[h.currency + code];
+    if (rate){
+      fxBox.innerHTML = `
+        <div class="label">Měnový dopad (${h.currency} → ${code})</div>
+        <div class="small num">Aktuální kurz: <b>1 ${h.currency} = ${rate.toFixed(3)} ${code}</b></div>
+        <div class="tiny muted" style="margin-top:3px">Tvoje pozice je v ${h.currency}. Hodnota v ${code} kolísá nejen s cenou akcie, ale i s kurzem – posílení ${code} ti hodnotu v přepočtu snižuje a naopak.</div>`;
+    }
+  }
+}
+
+function setRange(r){ detailRange = r; detailCache = {}; renderDetail(); }
 
 function destroyChartById(id){
   const c = Chart.getChart(id);
@@ -734,23 +1108,52 @@ async function loadDetailExtras(h){
     }
   }catch(e){}
 
-  // Earnings + zprávy (Finnhub)
+  // Earnings termín + historie reportů (Yahoo summary) + zprávy (Finnhub)
+  const s = await fetchSummary(h.symbol);
+  const eBox = document.getElementById('earnBox');
+  if (eBox && s && (s.nextEarnings || (s.earningsHistory && s.earningsHistory.length))){
+    const hist = s.earningsHistory || [];
+    eBox.innerHTML = `<div class="card">
+      <h3>Kvartální výsledky</h3>
+      ${s.nextEarnings ? `<div style="display:flex; gap:10px; align-items:center; margin-bottom:${hist.length?'12px':'0'}">
+        <span style="font-size:22px">🗓</span>
+        <div><b>Příští report: ${fmtDate(s.nextEarnings)}</b>
+          <div class="tiny muted">${daysUntil(s.nextEarnings)}</div></div>
+      </div>` : ''}
+      ${hist.length ? `<div class="tiny muted" style="margin-bottom:6px">Poslední výsledky (EPS skutečnost vs. odhad):</div>
+        ${hist.slice().reverse().map(e => {
+          const beat = (e.surprisePct ?? 0) >= 0;
+          return `<div class="row" style="cursor:default; padding:7px 0">
+            <span class="small">${e.date ? fmtDate(e.date) : '–'}</span>
+            <span class="r">
+              <span class="num small">${e.actual != null ? e.actual.toFixed(2) : '–'}
+                <span class="muted">/ ${e.estimate != null ? e.estimate.toFixed(2) : '–'}</span></span>
+              ${e.surprisePct != null ? `<span class="pill ${beat?'up':'down'} num" style="margin-left:6px">${fmtPct(e.surprisePct)}</span>` : ''}
+            </span>
+          </div>`;
+        }).join('')}` : ''}
+    </div>`;
+  } else if (eBox && state.settings.finnhubKey && !h.symbol.includes('-')){
+    // Záloha přes Finnhub, když Yahoo summary nevrátí termín
+    try{
+      const earn = await fetchEarnings(h.symbol, 90);
+      if (earn.length && detailId === h.id){
+        const e = earn[0];
+        eBox.innerHTML = `<div class="card" style="display:flex; gap:12px; align-items:center">
+          <span style="font-size:22px">🗓</span>
+          <div><b>Kvartální výsledky</b>
+            <div class="small muted">${esc(e.date)}${e.eps != null ? ' · odhad EPS ' + e.eps.toFixed(2) : ''}</div>
+          </div></div>`;
+      }
+    }catch(e){}
+  }
+
+  // Zprávy (Finnhub)
   if (!state.settings.finnhubKey || h.symbol.includes('-')) return;
   try{
-    const [earn, news] = await Promise.all([
-      fetchEarnings(h.symbol, 90), fetchNews(h.symbol, 14)
-    ]);
-    const eBox = document.getElementById('earnBox');
-    if (eBox && earn.length){
-      const e = earn[0];
-      eBox.innerHTML = `<div class="card" style="display:flex; gap:12px; align-items:center">
-        <span style="font-size:24px">🗓</span>
-        <div><b>Kvartální výsledky</b>
-          <div class="small muted">${esc(e.date)}${e.eps != null ? ' · odhad EPS ' + e.eps.toFixed(2) : ''}</div>
-        </div></div>`;
-    }
+    const news = await fetchNews(h.symbol, 14);
     const nBox = document.getElementById('newsBox');
-    if (nBox && news.length){
+    if (nBox && news.length && detailId === h.id){
       nBox.innerHTML = `<div class="card"><h3>Zprávy</h3>
         ${news.slice(0,5).map(n => `
           <a class="newsitem" href="${esc(n.url)}" target="_blank" rel="noopener">
@@ -759,6 +1162,14 @@ async function loadDetailExtras(h){
           </a>`).join('')}</div>`;
     }
   }catch(e){}
+}
+
+function daysUntil(ms){
+  const d = Math.ceil((ms - Date.now())/86400e3);
+  if (d < 0) return 'proběhlo';
+  if (d === 0) return 'dnes';
+  if (d === 1) return 'zítra';
+  return 'za ' + d + ' dní';
 }
 
 function deleteTx(hid, tid){
@@ -793,15 +1204,43 @@ async function renderDividendsPage(){
   }).filter(x => x.income > 0).sort((a,b) => b.income - a.income);
 
   const monthly = {};
+  const monthlyBySymbol = {};
   for (const h of activeHoldings()){
     for (const d of (divCache[h.symbol] || [])){
       const dt = new Date(d.date);
       const k = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}`;
-      monthly[k] = (monthly[k] || 0) + toDisplay(d.amount * holdingQty(h), h.currency);
+      const amt = toDisplay(d.amount * holdingQty(h), h.currency);
+      monthly[k] = (monthly[k] || 0) + amt;
+      (monthlyBySymbol[k] = monthlyBySymbol[k] || {})[h.symbol] =
+        (monthlyBySymbol[k]?.[h.symbol] || 0) + amt;
     }
   }
   const months = Object.keys(monthly).sort();
   const total = trailingDividends();
+
+  // Barvy podle titulu (stejné pořadí jako koláč na přehledu)
+  const palette = ['#5b8cff','#3ddc97','#f5b941','#c77dff','#ff8fab','#4cc9f0','#ffa94d','#69db7c','#da77f2','#ff8787'];
+  const symColor = {};
+  bySymbol.forEach((x,i) => { symColor[x.symbol] = palette[i % palette.length]; });
+
+  // Předpověď příští dividendy: poslední výplata + typický interval (rok/4)
+  const upcoming = [];
+  for (const h of activeHoldings()){
+    const divs = (divCache[h.symbol] || []).slice().sort((a,b)=>a.date-b.date);
+    if (divs.length < 2) continue;
+    const last = divs[divs.length-1];
+    // odhad intervalu z mediánu rozestupů
+    const gaps = [];
+    for (let i=1;i<divs.length;i++) gaps.push(divs[i].date - divs[i-1].date);
+    gaps.sort((a,b)=>a-b);
+    const interval = gaps[Math.floor(gaps.length/2)];
+    const next = last.date + interval;
+    if (next > Date.now() - 7*86400e3){
+      upcoming.push({ symbol:h.symbol, date:next, amount:last.amount*holdingQty(h),
+        cur:h.currency, estimate:true });
+    }
+  }
+  upcoming.sort((a,b)=>a.date-b.date);
 
   view.innerHTML = `
     <button class="back" onclick="closeDetail()">‹ Zpět</button>
@@ -810,24 +1249,51 @@ async function renderDividendsPage(){
       <div class="big num up">${fmtMoney(total, code, 0)}</div>
       <div class="small muted num">≈ ${fmtMoney(total/12, code, 0)} měsíčně</div>
     </div>
+
+    ${upcoming.length ? `<div class="card"><h3>Dividendový kalendář (odhad)</h3>
+      ${upcoming.slice(0,8).map(u => `
+        <div class="row" style="cursor:default">
+          <div class="rowlogo">
+            <span style="width:9px;height:9px;border-radius:2px;background:${symColor[u.symbol]||'#5b8cff'};flex-shrink:0"></span>
+            <div class="l"><div class="sym">${esc(u.symbol)}</div>
+              <div class="name">${fmtDate(u.date)} · ${daysUntil(u.date)}</div></div>
+          </div>
+          <span class="num up">~ ${fmtMoney(toDisplay(u.amount, u.cur), code, 0)}</span>
+        </div>`).join('')}
+      <div class="tiny muted" style="margin-top:6px">Odhad podle historie výplat a obvyklého intervalu – skutečný termín a částku potvrzuje až firma.</div>
+    </div>` : ''}
+
     ${months.length ? `<div class="card"><h3>Po měsících</h3>
-      <div class="chartwrap short"><canvas id="divChart"></canvas></div></div>` : ''}
+      <div class="chartwrap short"><canvas id="divChart"></canvas></div>
+      <div style="display:flex; flex-wrap:wrap; gap:8px; margin-top:8px">
+        ${bySymbol.filter(x=>x.income>0).map(x => `<span class="tiny" style="display:flex; align-items:center; gap:4px">
+          <span style="width:8px;height:8px;border-radius:2px;background:${symColor[x.symbol]}"></span>${esc(x.symbol)}</span>`).join('')}
+      </div></div>` : ''}
+
     ${bySymbol.length ? `<div class="card"><h3>Podle titulu</h3>
       ${bySymbol.map(x => `<div class="row" style="cursor:default">
-        <span class="sym">${esc(x.symbol)}</span>
+        <div class="rowlogo">
+          <span style="width:9px;height:9px;border-radius:2px;background:${symColor[x.symbol]};flex-shrink:0"></span>
+          <span class="sym">${esc(x.symbol)}</span></div>
         <span class="num up">${fmtMoney(x.income, code, 0)}</span></div>`).join('')}</div>`
       : '<div class="empty"><span class="ico">💶</span>Za posledních 12 měsíců nebyly nalezeny žádné výplaty dividend.</div>'}
     <div class="tiny muted" style="padding:0 6px">Počítáno z historie výplat za poslední rok a aktuálně drženého množství – orientační odhad ročního příjmu.</div>
   `;
 
   if (months.length){
+    // skládaný sloupcový graf rozdělený podle titulu
+    const datasets = bySymbol.filter(x=>x.income>0).map(x => ({
+      label: x.symbol,
+      data: months.map(m => monthlyBySymbol[m]?.[x.symbol] || 0),
+      backgroundColor: symColor[x.symbol], borderRadius:3, stack:'d'
+    }));
     charts.push(new Chart(document.getElementById('divChart'), {
       type:'bar',
-      data:{ labels: months.map(m => m.slice(5)+'/'+m.slice(2,4)),
-        datasets:[{ data: months.map(m => monthly[m]), backgroundColor:'#3ddc97', borderRadius:4 }]},
-      options:{ maintainAspectRatio:false, plugins:{legend:{display:false}},
-        scales:{ x:{grid:{display:false}, ticks:{color:CHART_TICK}},
-                 y:{grid:{color:CHART_GRID}, ticks:{color:CHART_TICK, maxTicksLimit:5}}}}
+      data:{ labels: months.map(m => m.slice(5)+'/'+m.slice(2,4)), datasets },
+      options:{ maintainAspectRatio:false, plugins:{legend:{display:false},
+        tooltip:{callbacks:{label:c=>c.dataset.label+': '+fmtMoney(c.parsed.y, code, 0)}}},
+        scales:{ x:{stacked:true, grid:{display:false}, ticks:{color:CHART_TICK}},
+                 y:{stacked:true, grid:{color:CHART_GRID}, ticks:{color:CHART_TICK, maxTicksLimit:5}}}}
     }));
   }
 }
@@ -987,6 +1453,16 @@ function renderSettings(){
     </div>
 
     <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center">
+        <div><b>Zámek aplikace</b>
+          <div class="tiny muted">Face ID / Touch ID při otevření</div></div>
+        <label class="switch"><input type="checkbox" ${lockConfig().enabled ? 'checked' : ''}
+          onchange="toggleLock(this)"><span></span></label>
+      </div>
+      <div class="tiny muted" style="margin-top:8px">Funguje u aplikace přidané na plochu. Ověření probíhá biometrikou zařízení – žádné heslo se nikam neukládá.</div>
+    </div>
+
+    <div class="card">
       <h3>Zdroje dat</h3>
       <div class="row" style="cursor:default"><span class="muted small">Ceny a grafy</span><span class="small">Yahoo Finance</span></div>
       <div class="row" style="cursor:default"><span class="muted small">Zprávy a výsledky</span><span class="small">Finnhub</span></div>
@@ -1015,6 +1491,17 @@ function toggleAlerts(on){
   renderSettings();
 }
 function setDropPct(v){ state.settings.dropPct = parseInt(v) || 5; save(); }
+
+async function toggleLock(el){
+  if (el.checked){
+    const ok = await enableBiometric();
+    if (!ok){ el.checked = false; return; }
+    toast('Zámek zapnut ✓');
+  } else {
+    setLockConfig({enabled:false});
+    toast('Zámek vypnut');
+  }
+}
 
 function exportData(){
   const blob = new Blob([JSON.stringify({holdings:state.holdings, watchlist:state.watchlist, settings:state.settings}, null, 2)],
@@ -1175,12 +1662,419 @@ function saveTx(hid){
 }
 
 /* =========================================================
+   IMPORT Z BROKERA (XTB, Revolut a další – CSV/XLSX)
+========================================================= */
+let imp = null;   // {headers, rows, map, txs, fileName}
+
+const HKEYS = {
+  symbol: ['symbol','ticker','instrument'],
+  type:   ['typ','type','side','směr','smer','operace','operation','transaction'],
+  qty:    ['objem','volume','quantity','množství','mnozstvi','kusy','no. of shares','shares','units','počet','pocet'],
+  date:   ['čas otevření','cas otevreni','open time','datum','date','čas','cas','time'],
+  fee:    ['komise','commission','poplatky','poplatek','fee'],
+  cur:    ['měna','mena','currency'],
+  cprice: ['cena zavření','cena zavreni','close price'],
+  cdate:  ['čas zavření','cas zavreni','close time'],
+  price:  ['cena otevření','cena otevreni','open price','price per share','cena za kus','cena','price'],
+};
+const ROLE_LABELS = {
+  symbol:'Symbol *', type:'Typ (nákup/prodej)', qty:'Množství *', date:'Datum *',
+  price:'Cena za kus *', fee:'Poplatek', cur:'Měna', cprice:'Cena zavření (XTB)', cdate:'Čas zavření (XTB)'
+};
+
+function openImport(){
+  imp = null;
+  openModal(`
+    <h2>Import z brokera</h2>
+    <div class="small muted" style="margin-bottom:12px">
+      Nahraj výpis transakcí ve formátu <b>CSV nebo Excel</b> (XTB, Revolut i jiní brokeři).
+      Soubor se zpracuje pouze v tomto zařízení – nikam se neodesílá.
+      Před importem uvidíš náhled a sám vybereš, co zahrnout.</div>
+    <input type="file" id="impFile" accept=".csv,.xlsx,.xls,.txt" onchange="impLoadFile(this)">
+    <div id="impBody"></div>
+  `);
+}
+
+function impLoadFile(input){
+  const file = input.files[0]; if (!file) return;
+  const body = document.getElementById('impBody');
+  body.innerHTML = '<div class="muted small">Načítám soubor…</div>';
+  const isXlsx = /\.xlsx?$/i.test(file.name);
+  const reader = new FileReader();
+  reader.onload = () => {
+    try{
+      let rows;
+      if (isXlsx){
+        const wb = XLSX.read(new Uint8Array(reader.result), {type:'array'});
+        let best = [];
+        for (const name of wb.SheetNames){
+          const r = XLSX.utils.sheet_to_json(wb.Sheets[name], {header:1, raw:false, defval:''});
+          if (r.length > best.length) best = r;
+        }
+        rows = best.map(r => (r || []).map(c => String(c ?? '')));
+      } else {
+        rows = parseCSV(reader.result);
+      }
+      if (!rows.length) throw new Error('prázdný soubor');
+      impPrepare(rows);
+    }catch(e){
+      body.innerHTML = '<div class="small down">Soubor se nepodařilo přečíst: ' + esc(e.message || e) + '</div>';
+    }
+  };
+  if (isXlsx) reader.readAsArrayBuffer(file); else reader.readAsText(file);
+}
+
+function parseCSV(text){
+  text = String(text).replace(/^\uFEFF/, '');
+  const sample = text.slice(0, 5000);
+  const delim = [';', '\t', ','].map(d => ({
+    d, n: (sample.match(new RegExp(d === '\t' ? '\\t' : '\\' + d, 'g')) || []).length
+  })).sort((a,b) => b.n - a.n)[0].d;
+
+  const rows = []; let row = [], cell = '', inQ = false;
+  for (let i = 0; i < text.length; i++){
+    const ch = text[i];
+    if (inQ){
+      if (ch === '"'){ if (text[i+1] === '"'){ cell += '"'; i++; } else inQ = false; }
+      else cell += ch;
+    } else {
+      if (ch === '"') inQ = true;
+      else if (ch === delim){ row.push(cell); cell = ''; }
+      else if (ch === '\n' || ch === '\r'){
+        if (ch === '\r' && text[i+1] === '\n') i++;
+        row.push(cell); cell = '';
+        if (row.some(c => c.trim() !== '')) rows.push(row);
+        row = [];
+      } else cell += ch;
+    }
+  }
+  row.push(cell);
+  if (row.some(c => c.trim() !== '')) rows.push(row);
+  return rows;
+}
+
+function impPrepare(allRows){
+  // Najdi řádek s hlavičkami (XTB má před tabulkou často pár informačních řádků)
+  const allKeys = Object.values(HKEYS).flat();
+  let best = {score: 0, idx: 0};
+  for (let i = 0; i < Math.min(allRows.length, 30); i++){
+    const score = allRows[i].reduce((s, c) => {
+      const lc = String(c).toLowerCase();
+      return s + (lc && allKeys.some(k => lc.includes(k)) ? 1 : 0);
+    }, 0);
+    if (score > best.score) best = {score, idx: i};
+  }
+  if (best.score < 2){
+    document.getElementById('impBody').innerHTML =
+      '<div class="small down">V souboru se nepodařilo najít hlavičky tabulky (Symbol, Množství, Cena…). Zkontroluj, že exportuješ výpis obchodů/pozic.</div>';
+    return;
+  }
+  const headers = allRows[best.idx].map(h => String(h).trim());
+  imp = { headers, rows: allRows.slice(best.idx + 1), map: autoMap(headers) };
+  impRender();
+}
+
+function autoMap(headers){
+  const low = headers.map(h => h.toLowerCase());
+  const used = new Set(); const map = {};
+  for (const role of ['symbol','type','qty','date','fee','cur','cprice','cdate','price']){
+    outer:
+    for (const key of HKEYS[role]){
+      for (let i = 0; i < low.length; i++){
+        if (!used.has(i) && low[i].includes(key)){ map[role] = i; used.add(i); break outer; }
+      }
+    }
+  }
+  return map;
+}
+
+function num(s){
+  if (s == null) return null;
+  s = String(s).replace(/\s/g, '').replace(/[^\d,.\-]/g, '');
+  if (!s) return null;
+  const lc = s.lastIndexOf(','), ld = s.lastIndexOf('.');
+  if (lc >= 0 && ld >= 0){
+    if (lc > ld) s = s.replace(/\./g, '').replace(',', '.');   // 1.234,56
+    else s = s.replace(/,/g, '');                              // 1,234.56
+  } else if (lc >= 0){
+    const commas = (s.match(/,/g) || []).length;
+    s = commas > 1 ? s.replace(/,/g, '') : s.replace(',', '.');
+  }
+  const v = parseFloat(s);
+  return isFinite(v) ? v : null;
+}
+
+function parseAnyDate(s){
+  if (!s) return null;
+  s = String(s).trim();
+  if (/^\d+(\.\d+)?$/.test(s)){           // Excel sériové číslo data
+    const n = parseFloat(s);
+    if (n > 20000 && n < 80000) return Math.round((n - 25569) * 86400000);
+  }
+  let m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:[ T](\d{1,2}):(\d{2}))?/);   // 31.12.2024 14:30
+  if (m) return new Date(+m[3], +m[2]-1, +m[1], +(m[4]||0), +(m[5]||0)).getTime();
+  m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);                                   // 2024-12-31 / ISO
+  if (m){ const d = new Date(s); return isNaN(d) ? new Date(+m[1], +m[2]-1, +m[3]).getTime() : d.getTime(); }
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);                               // 12/31/24
+  if (m){ let y = +m[3]; if (y < 100) y += 2000; return new Date(y, +m[1]-1, +m[2]).getTime(); }
+  const d = new Date(s);
+  return isNaN(d) ? null : d.getTime();
+}
+
+function normKind(t){
+  t = String(t).toLowerCase();
+  if (/(buy|nákup|nakup|koup)/.test(t)) return 'buy';
+  if (/(sell|prodej|prod)/.test(t)) return 'sell';
+  return null;
+}
+
+// Převod symbolů brokera na Yahoo formát (hlavně přípony burz u XTB)
+function yahooGuess(s){
+  s = String(s).toUpperCase().trim();
+  const map = { '.UK':'.L', '.US':'', '.PL':'.WA', '.CZ':'.PR', '.NL':'.AS', '.FR':'.PA',
+    '.IT':'.MI', '.ES':'.MC', '.CH':'.SW', '.SE':'.ST', '.NO':'.OL', '.DK':'.CO',
+    '.PT':'.LS', '.BE':'.BR', '.AT':'.VI', '.FI':'.HE' };
+  for (const k in map) if (s.endsWith(k)) return s.slice(0, -k.length) + map[k];
+  return s;
+}
+
+function isDupTx(ysym, tx){
+  const h = state.holdings.find(x => x.symbol === ysym);
+  if (!h) return false;
+  return h.txs.some(t => t.kind === tx.kind
+    && Math.abs(t.qty - tx.qty) < 1e-6
+    && Math.abs(t.price - tx.price) < 0.01
+    && new Date(t.date).toDateString() === new Date(tx.date).toDateString());
+}
+
+function impParseRows(){
+  const m = imp.map; const out = []; let id = 0;
+  for (const r of imp.rows){
+    const get = role => (m[role] != null) ? String(r[m[role]] ?? '').trim() : '';
+    const sym = get('symbol').toUpperCase();
+    if (!sym) continue;
+    const typeRaw = get('type');
+    const kind = (m.type != null) ? normKind(typeRaw) : 'buy';
+    const qty = num(get('qty'));
+    const price = num(get('price'));
+    const date = parseAnyDate(get('date'));
+    const fee = num(get('fee')) || 0;
+    const cur = (get('cur').toUpperCase().match(/[A-Z]{3}/) || [null])[0];
+    const base = {symbol: sym, cur, typeRaw};
+
+    if (kind === null){
+      out.push({...base, id:'r'+(id++), reason: 'není nákup/prodej („' + typeRaw + '“)', date, qty, price});
+      continue;
+    }
+    if (!qty || price == null || !date){
+      out.push({...base, id:'r'+(id++), reason: 'chybí množství, cena nebo datum', date, qty, price});
+      continue;
+    }
+    const ysym = yahooGuess(sym);
+    const t1 = {...base, id:'r'+(id++), kind, date, qty, price, fee};
+    t1.dup = isDupTx(ysym, t1);
+    out.push(t1);
+
+    // XTB uzavřené pozice: jeden řádek = nákup + prodej
+    const cprice = num(get('cprice'));
+    const cdate = parseAnyDate(get('cdate'));
+    if (kind === 'buy' && cprice != null && cdate){
+      const t2 = {...base, id:'r'+(id++), kind:'sell', date:cdate, qty, price:cprice, fee:0};
+      t2.dup = isDupTx(ysym, t2);
+      out.push(t2);
+    }
+  }
+  return out;
+}
+
+function impRender(){
+  imp.txs = impParseRows();
+  const valid = imp.txs.filter(t => !t.reason);
+  const skipped = imp.txs.filter(t => t.reason);
+  const syms = [...new Set(valid.map(t => t.symbol))];
+
+  const mappingHTML = `
+    <details style="margin:12px 0">
+      <summary class="small" style="cursor:pointer; color:var(--accent); font-weight:600">Mapování sloupců (automaticky rozpoznáno – rozklikni pro úpravu)</summary>
+      <div style="margin-top:10px">
+        ${Object.keys(ROLE_LABELS).map(role => `
+          <label class="f">${ROLE_LABELS[role]}</label>
+          <select onchange="impSetMap('${role}', this.value)">
+            <option value="">– nepoužito –</option>
+            ${imp.headers.map((h, i) => `<option value="${i}" ${imp.map[role] === i ? 'selected' : ''}>${esc(h) || '(sloupec ' + (i+1) + ')'}</option>`).join('')}
+          </select>`).join('')}
+      </div>
+    </details>`;
+
+  const symMapHTML = syms.length ? `
+    <div class="card" style="margin:12px 0; padding:12px">
+      <div class="small" style="font-weight:700; margin-bottom:8px">Symboly pro Yahoo Finance (zkontroluj/uprav)</div>
+      ${syms.map(s => `
+        <div style="display:flex; align-items:center; gap:8px; margin-bottom:6px">
+          <span class="small num" style="width:90px; flex-shrink:0">${esc(s)}</span>
+          <input data-symmap="${esc(s)}" value="${esc(yahooGuess(s))}" style="margin:0; padding:8px"
+            autocapitalize="characters" autocomplete="off">
+        </div>`).join('')}
+      <div class="tiny muted">Přípony burz XTB se převádí automaticky (.UK→.L, .US→nic, .CZ→.PR…). Pokud si nejsi jistý, ověř symbol vyhledáváním v záložce Portfolio.</div>
+    </div>` : '';
+
+  const listHTML = `
+    <div style="display:flex; gap:8px; margin:10px 0">
+      <button class="btn ghost" style="padding:8px; font-size:13px" onclick="impCheckAll(true)">Vybrat vše</button>
+      <button class="btn ghost" style="padding:8px; font-size:13px" onclick="impCheckAll(false)">Zrušit výběr</button>
+    </div>
+    ${valid.map(t => `
+      <label style="display:flex; align-items:center; gap:10px; padding:9px 0; border-bottom:1px solid var(--line); cursor:pointer">
+        <input type="checkbox" id="imp-${t.id}" ${t.dup ? '' : 'checked'} style="width:auto; margin:0">
+        <div style="flex:1; min-width:0">
+          <div class="small"><b>${esc(t.symbol)}</b> · ${t.kind === 'buy' ? '🔵 nákup' : '🟠 prodej'}
+            <span class="num">${fmtQty(t.qty)} ks × ${t.price}${t.cur ? ' ' + t.cur : ''}</span></div>
+          <div class="tiny muted">${fmtDate(t.date)}${t.fee ? ' · poplatek ' + t.fee : ''}${t.dup ? ' · <span class="down">duplicitní – už je v aplikaci</span>' : ''}</div>
+        </div>
+      </label>`).join('')}
+    ${skipped.length ? `
+      <details style="margin-top:10px">
+        <summary class="tiny muted" style="cursor:pointer">Přeskočené řádky (${skipped.length}) – dividendy, vklady, neúplné…</summary>
+        ${skipped.slice(0, 40).map(t => `
+          <div class="tiny muted" style="padding:5px 0; border-bottom:1px solid var(--line)">
+            ${esc(t.symbol)} – ${esc(t.reason)}</div>`).join('')}
+      </details>` : ''}`;
+
+  document.getElementById('impBody').innerHTML = mappingHTML + symMapHTML +
+    (valid.length
+      ? listHTML + `<button class="btn primary" id="impGo" style="margin-top:14px"
+          onclick="impDoImport()">Importovat vybrané transakce</button>`
+      : '<div class="small down" style="margin-top:10px">Nenašel jsem žádné importovatelné obchody. Zkontroluj mapování sloupců výše.</div>');
+}
+
+function impSetMap(role, v){
+  imp.map[role] = v === '' ? null : parseInt(v);
+  impRender();
+}
+function impCheckAll(on){
+  imp.txs.filter(t => !t.reason).forEach(t => {
+    const el = document.getElementById('imp-' + t.id);
+    if (el) el.checked = on;
+  });
+}
+
+async function impDoImport(){
+  const symMap = {};
+  document.querySelectorAll('[data-symmap]').forEach(i => {
+    symMap[i.dataset.symmap] = i.value.trim().toUpperCase();
+  });
+  const chosen = imp.txs.filter(t => !t.reason && document.getElementById('imp-' + t.id)?.checked);
+  if (!chosen.length){ toast('Nevybral jsi žádné transakce'); return; }
+
+  const btn = document.getElementById('impGo');
+  btn.disabled = true; btn.textContent = 'Importuji…';
+
+  let added = 0;
+  for (const t of chosen){
+    const ysym = symMap[t.symbol] || yahooGuess(t.symbol);
+    if (!ysym) continue;
+    let h = state.holdings.find(x => x.symbol === ysym);
+    if (!h){
+      let cur = t.cur || 'USD', name = ysym, type = 'Akcie';
+      try{ const q = await fetchQuote(ysym); cur = q.currency; quotes[ysym] = q; }catch(e){}
+      try{
+        const sr = await fetchSearch(ysym);
+        const hit = sr.find(x => x.symbol === ysym) || sr[0];
+        if (hit){
+          name = hit.name;
+          type = hit.quoteType === 'ETF' ? 'ETF' : hit.quoteType === 'CRYPTOCURRENCY' ? 'Krypto' : 'Akcie';
+        }
+      }catch(e){}
+      h = {id: uid(), symbol: ysym, name, currency: cur, type, txs: []};
+      state.holdings.push(h);
+    }
+    h.txs.push({id: uid(), kind: t.kind, date: t.date, qty: t.qty, price: t.price, fee: t.fee || 0});
+    added++;
+  }
+  save(); closeModal(); render();
+  await refreshAll();
+  toast('Importováno ' + added + ' transakcí ✓');
+}
+
+/* =========================================================
+   BIOMETRICKÝ ZÁMEK (Face ID / Touch ID přes WebAuthn)
+========================================================= */
+// Pozn.: PWA na iOS nemá přímé API na Face ID. Použijeme WebAuthn –
+// při zapnutí se vytvoří „passkey" navázaná na zařízení, kterou iOS odemkne
+// pomocí Face ID / Touch ID. Klíč i ID se ukládají jen lokálně.
+const LOCK_KEY = 'mojeportfolio-lock';
+function lockConfig(){
+  try{ return JSON.parse(localStorage.getItem(LOCK_KEY)) || {}; }catch(e){ return {}; }
+}
+function setLockConfig(c){ localStorage.setItem(LOCK_KEY, JSON.stringify(c)); }
+const b64ToBuf = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const bufToB64 = b => btoa(String.fromCharCode(...new Uint8Array(b)));
+
+async function enableBiometric(){
+  if (!window.PublicKeyCredential){ toast('Zařízení nepodporuje biometrický zámek'); return false; }
+  try{
+    const challenge = crypto.getRandomValues(new Uint8Array(32));
+    const userId = crypto.getRandomValues(new Uint8Array(16));
+    const cred = await navigator.credentials.create({ publicKey:{
+      challenge, rp:{name:'Moje Portfolio'},
+      user:{id:userId, name:'portfolio', displayName:'Moje Portfolio'},
+      pubKeyCredParams:[{type:'public-key', alg:-7},{type:'public-key', alg:-257}],
+      authenticatorSelection:{ userVerification:'required', residentKey:'preferred' },
+      timeout:60000
+    }});
+    setLockConfig({ enabled:true, credId: bufToB64(cred.rawId) });
+    return true;
+  }catch(e){ toast('Nastavení zámku se nezdařilo'); return false; }
+}
+
+async function verifyBiometric(){
+  const cfg = lockConfig();
+  if (!cfg.enabled) return true;
+  try{
+    const challenge = crypto.getRandomValues(new Uint8Array(32));
+    const opts = { challenge, timeout:60000, userVerification:'required' };
+    if (cfg.credId) opts.allowCredentials = [{ type:'public-key', id: b64ToBuf(cfg.credId) }];
+    await navigator.credentials.get({ publicKey: opts });
+    return true;
+  }catch(e){ return false; }
+}
+
+function showLockScreen(){
+  const el = document.createElement('div');
+  el.className = 'lock'; el.id = 'lockScreen';
+  el.innerHTML = `<div class="icon">🔒</div>
+    <h2>Portfolio je uzamčeno</h2>
+    <p>Pro přístup ověř svou identitu pomocí Face ID nebo otisku prstu.</p>
+    <button class="btn primary" style="max-width:260px" id="unlockBtn">Odemknout</button>`;
+  document.body.appendChild(el);
+  const tryUnlock = async () => {
+    if (await verifyBiometric()){ el.remove(); }
+    else toast('Ověření se nezdařilo, zkus to znovu');
+  };
+  document.getElementById('unlockBtn').onclick = tryUnlock;
+  tryUnlock();
+}
+
+/* =========================================================
    START + AUTO-REFRESH
 ========================================================= */
-render();
-refreshAll().then(() => refreshDividends());
+async function start(){
+  if (lockConfig().enabled){
+    showLockScreen();
+  }
+  render();
+  await refreshAll();
+  refreshDividends();
+}
+start();
 setInterval(() => { if (!document.hidden) refreshAll(); }, 30000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshAll(); });
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden){
+    refreshAll();
+    // Při návratu do appky znovu zamkni, pokud je zámek zapnutý
+    if (lockConfig().enabled && !document.getElementById('lockScreen')) showLockScreen();
+  }
+});
 </script>
 </body>
 </html>
