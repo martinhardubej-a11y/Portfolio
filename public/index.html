@@ -270,8 +270,12 @@ async function fetchQuote(symbol){
 }
 
 // Detailní fundamenty (P/E, 52t rozpětí, doporučení, earnings termín)
+// DOČASNĚ VYPNUTO: endpoint quoteSummary spouštěl u Yahoo blokaci "Too Many Requests".
+// Vrací null → detail pozice funguje bez P/E a doporučení (ceny, graf, dividendy jedou normálně).
 const summaryCache = {};
+const FUNDAMENTALS_ENABLED = false;
 async function fetchSummary(symbol){
+  if (!FUNDAMENTALS_ENABLED) return null;
   if (summaryCache[symbol]) return summaryCache[symbol];
   try{
     const j = await yahoo({endpoint:'quoteSummary', symbol});
