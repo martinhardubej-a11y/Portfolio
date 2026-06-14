@@ -245,7 +245,23 @@ function savePrepost(){
   try{ localStorage.setItem(LAST_PREPOST_KEY, JSON.stringify(lastPrepost)); }catch(e){}
 }
 
-async function fetchQuote(symbol){
+// Cena z Finnhubu (volá se přímo z prohlížeče, mimo blokovaný Netlify server).
+// Funguje pro US akcie a krypto; evropské burzy free tarif nepokrývá.
+async function fetchQuoteFinnhub(symbol){
+  const key = state.settings.finnhubKey;
+  if (!key) throw new Error('no finnhub key');
+  // Finnhub bere US tickery bez přípony (AAPL), krypto jako BINANCE:BTCUSDT – my řešíme jen akcie/ETF US
+  const fsym = symbol.replace(/\.(US)$/i, '');
+  const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(fsym)}&token=${encodeURIComponent(key)}`);
+  if (!res.ok) throw new Error('finnhub ' + res.status);
+  const d = await res.json();
+  // c = current, pc = previous close; 0 znamená "nezná"
+  if (!d || !d.c || d.c === 0) throw new Error('finnhub no data');
+  return { symbol, price: d.c, prev: d.pc || d.c, currency: 'USD',
+    pre: null, post: null, state: null };
+}
+
+async function fetchQuoteYahoo(symbol){
   const j = await yahoo({endpoint:'chart', symbol, range:'1d', interval:'5m', prepost:'1'});
   const m = j?.chart?.result?.[0]?.meta;
   if (!m || m.regularMarketPrice == null) throw new Error('no quote');
@@ -256,9 +272,8 @@ async function fetchQuote(symbol){
     currency: m.currency || 'USD',
     pre:  m.preMarketPrice  ?? null,
     post: m.postMarketPrice ?? null,
-    state: m.marketState || null   // PRE, REGULAR, POST, CLOSED
+    state: m.marketState || null
   };
-  // Zachyť poslední platnou pre/post cenu, ať ji můžeme ukázat i o víkendu
   if (q.pre != null && q.state === 'PRE'){
     lastPrepost[symbol] = {kind:'pre', price:q.pre, ref:q.price, currency:q.currency, at:Date.now()};
     savePrepost();
@@ -267,6 +282,18 @@ async function fetchQuote(symbol){
     savePrepost();
   }
   return q;
+}
+
+// Hlavní: zkus nejdřív Finnhub (stabilní, mimo Netlify), pak Yahoo jako zálohu.
+// US akcie většinou vyřeší Finnhub; evropská ETF spadnou na Yahoo.
+async function fetchQuote(symbol){
+  const isCrypto = symbol.includes('-USD');
+  const looksUS = !symbol.includes('.') || /\.US$/i.test(symbol);
+  // Finnhub zkoušej jen pro US akcie (na free tarifu krypto/EU nejde spolehlivě)
+  if (state.settings.finnhubKey && looksUS && !isCrypto){
+    try{ return await fetchQuoteFinnhub(symbol); }catch(e){ /* fallback na Yahoo */ }
+  }
+  return await fetchQuoteYahoo(symbol);
 }
 
 // Detailní fundamenty (P/E, 52t rozpětí, doporučení, earnings termín)
